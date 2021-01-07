@@ -20,12 +20,14 @@
 #include <linux/mmc/mmc.h>
 #include <linux/reboot.h>
 #include <trace/events/mmc.h>
+#include <linux/proc_fs.h>
 
 #include "core.h"
 #include "bus.h"
 #include "mmc_ops.h"
 #include "sd_ops.h"
 
+static u8  storage_primary_health;
 static const unsigned int tran_exp[] = {
 	10000,		100000,		1000000,	10000000,
 	0,		0,		0,		0
@@ -58,6 +60,118 @@ static const unsigned int tacc_mant[] = {
 			__res |= resp[__off-1] << ((32 - __shft) % 32);	\
 		__res & __mask;						\
 	})
+
+//ASUS_BSP +++ jessie_tian "add eMMC total size for AMAX"+++
+static char* asus_get_emmc_total_size(struct mmc_card *card)
+{
+	BUG_ON(!card);
+	return card->mmc_total_size;
+}
+//ASUS_BSP --- jessie_tian "add eMMC total size for AMAX"+++
+
+//ASUS_BSP +++ jessie_tian "emmc info for ATD"
+static char whole_name[256] = {0};
+#define EMMC_VERSION_MAX 9
+static char *emmc_version[] = { 0, 0, 0, 0, 0, "v4.41", "v4.5", "v5.0", "v5.1"};
+
+static void mmc_get_manf(unsigned int id, char *manf)
+{
+	switch (id) 
+	{
+		case 0x15:
+			strcpy(manf, "SAMSUNG");
+			break;
+		case 0x90:
+			strcpy(manf, "HYNIX");
+			break;
+		case 0x70:
+			strcpy(manf, "KINGSTON");
+			break;
+		case 0x13:
+			strcpy(manf, "MICRON");
+			break;
+		case 0x45:
+			strcpy(manf, "SANDISK");
+			break;
+		case 0x11:
+			strcpy(manf, "TOSHIBA");
+			break;
+		default:
+			strcpy(manf, "UNKNOWVENDOR");
+			break;
+	}
+}
+
+static void mmc_dump_status(struct mmc_card *card)
+{
+	char manfname[16];
+	char mmc_status[256];
+
+	mmc_get_manf(card->cid.manfid, manfname);
+	sprintf(mmc_status, "%s:[EMMC_STATUS] vendor=%s, emmc_version=%s, emmc_size=%sG, fw_version=0x%02x%02x%02x%02x%02x%02x%02x%02x, lifeA=0x%02x, lifeB=0x%02x, preEOL=0x%02x\n",
+		mmc_hostname(card->host),
+		manfname,
+		(card->ext_csd.rev < EMMC_VERSION_MAX) ? emmc_version[card->ext_csd.rev] : "UNKNOWN",
+		card->mmc_total_size,
+		card->ext_csd.raw_fw_version[7],
+		card->ext_csd.raw_fw_version[6],
+		card->ext_csd.raw_fw_version[5],
+		card->ext_csd.raw_fw_version[4],
+		card->ext_csd.raw_fw_version[3],
+		card->ext_csd.raw_fw_version[2],
+		card->ext_csd.raw_fw_version[1],
+		card->ext_csd.raw_fw_version[0],
+		card->ext_csd.device_life_time[0],
+		card->ext_csd.device_life_time[1],
+		card->ext_csd.pre_device_eol);
+	pr_info("%s", mmc_status);
+	//ASUSEvtlog("%s", mmc_status);
+}
+
+static char* asus_get_emmc_status(struct mmc_card *card)
+{	
+	char manfname[16];
+	BUG_ON(!card);
+
+	//add verdor name
+	mmc_get_manf(card->cid.manfid, manfname);
+	strcpy(whole_name, manfname);
+	strcat(whole_name, "_");
+	
+	//add emmc size
+	strcat(whole_name, asus_get_emmc_total_size(card));
+	
+	//add emmc version
+	if (5 == card->ext_csd.rev)
+		strcat(whole_name, "G_v4.41");
+	else if (6 == card->ext_csd.rev)
+		strcat(whole_name, "G_v4.5");
+	else if (7 == card->ext_csd.rev)
+	{
+		strcat(whole_name, "G_v5.0");
+		//ASUS_BSP jessie_tian: add for DEVICE_LIFE_TIME_EST_TYP of eMMC
+		sprintf(whole_name + strlen(whole_name) , "-0x%02x",card->ext_csd.device_life_time[1]);
+	}
+	else if (8 == card->ext_csd.rev)
+	{
+		strcat(whole_name, "G_v5.1");
+		//ASUS_BSP jessie_tian: add for DEVICE_LIFE_TIME_EST_TYP of eMMC
+		sprintf(whole_name + strlen(whole_name) , "-0x%02x",card->ext_csd.device_life_time[1]);
+	}
+	printk("[eMMC] emmc-status:%s\n",whole_name);
+	return whole_name;
+}
+//ASUS_BSP --- jessie_tian "emmc info for ATD"
+
+//<ASUS_BSP +++ Hank2_Liu 20170302> Add EMMC Node for ATD ++++++
+static int asus_get_emmc_prv(struct mmc_card *card)
+{
+	int prv;
+	u32 *resp = card->raw_cid;
+	prv = UNSTUFF_BITS(resp, 48, 8);
+	return prv;
+}
+//<ASUS_BSP +++ Hank2_Liu 20170302> Add EMMC Node for ATD ------
 
 /*
  * Given the decoded CSD structure, decode the raw CID to our CID structure.
@@ -410,6 +524,7 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 {
 	int err = 0, idx;
 	unsigned int part_size;
+	int i;
 
 	BUG_ON(!card);
 
@@ -435,6 +550,17 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 	 */
 	card->ext_csd.rev = ext_csd[EXT_CSD_REV];
 
+	//ASUS_BSP jessie_tian : add for fw version +++
+	card->ext_csd.raw_fw_version[0] = ext_csd[254];
+	card->ext_csd.raw_fw_version[1] = ext_csd[255];
+	card->ext_csd.raw_fw_version[2] = ext_csd[256];
+	card->ext_csd.raw_fw_version[3] = ext_csd[257];
+	card->ext_csd.raw_fw_version[4] = ext_csd[258];
+	card->ext_csd.raw_fw_version[5] = ext_csd[259];
+	card->ext_csd.raw_fw_version[6] = ext_csd[260];
+	card->ext_csd.raw_fw_version[7] = ext_csd[261];
+	//ASUS_BSP jessie_tian : add for fw version ---
+
 	card->ext_csd.raw_sectors[0] = ext_csd[EXT_CSD_SEC_CNT + 0];
 	card->ext_csd.raw_sectors[1] = ext_csd[EXT_CSD_SEC_CNT + 1];
 	card->ext_csd.raw_sectors[2] = ext_csd[EXT_CSD_SEC_CNT + 2];
@@ -449,6 +575,20 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 		/* Cards with density > 2GiB are sector addressed */
 		if (card->ext_csd.sectors > (2u * 1024 * 1024 * 1024) / 512)
 			mmc_card_set_blockaddr(card);
+
+	//ASUS_BSP jessie_tian : "add eMMC total size for AMAX"+++
+	i = fls(card->ext_csd.sectors);
+	if (i > 21) 
+	{
+		/* 4GB or above */
+		snprintf(card->mmc_total_size, 10, "%d", (card->ext_csd.sectors >> (i - 1)) << (i - 21));
+	} 
+	else
+	{
+		pr_err("wrong sector count");
+		goto out;
+	}
+	//ASUS_BSP jessie_tian : "add eMMC total size for AMAX"---
 	}
 
 	card->ext_csd.raw_card_type = ext_csd[EXT_CSD_CARD_TYPE];
@@ -665,6 +805,14 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 	}
 
 	if (card->ext_csd.rev >= 7) {
+	//ASUS_BSP jessie_tian : +++add device_life_time+++
+		card->ext_csd.pre_device_eol = ext_csd[267];	    //PRE_EOL_INFO
+		card->ext_csd.device_life_time[0] = ext_csd[268];   //typeA
+		card->ext_csd.device_life_time[1] = ext_csd[269];   //typeB
+	//ASUS_BSP jessie_tian : ---add device_life_time---
+	//ASUS_BSP Hank2_Liu 20161202 : Add proc file node to read emmc health status +++
+		storage_primary_health = ext_csd[267];
+	//ASUS_BSP Hank2_Liu 20161202 : Add proc file node to read emmc health status ---
 		/* Enhance Strobe is supported since v5.1 which rev should be
 		 * 8 but some eMMC devices can support it with rev 7. So handle
 		 * Enhance Strobe here.
@@ -813,6 +961,25 @@ MMC_DEV_ATTR(enhanced_rpmb_supported, "%#x\n",
 		card->ext_csd.enhanced_rpmb_supported);
 MMC_DEV_ATTR(rel_sectors, "%#x\n", card->ext_csd.rel_sectors);
 
+//ASUS_BSP +++ jessie_tian "emmc info for ATD"
+MMC_DEV_ATTR(emmc_status, "%s\n", asus_get_emmc_status(card));
+MMC_DEV_ATTR(emmc_fw_version, "0x%02x%02x%02x%02x%02x%02x%02x%02x\n", card->ext_csd.raw_fw_version[7],
+	card->ext_csd.raw_fw_version[6],
+	card->ext_csd.raw_fw_version[5],
+	card->ext_csd.raw_fw_version[4],
+	card->ext_csd.raw_fw_version[3],
+	card->ext_csd.raw_fw_version[2],
+	card->ext_csd.raw_fw_version[1],
+	card->ext_csd.raw_fw_version[0]);
+//ASUS_BSP +++ jessie_tian "add eMMC total size for AMAX"
+MMC_DEV_ATTR(emmc_total_size, "%s\n", asus_get_emmc_total_size(card));
+
+//<ASUS_BSP +++ Hank2_Liu 20170302> Add EMMC Node for ATD ++++++
+MMC_DEV_ATTR(emmc_prv, "0x%x\n", asus_get_emmc_prv(card));
+MMC_DEV_ATTR(emmc_size, "0x%02x%02x%02x%02x\n", card->ext_csd.raw_sectors[3], card->ext_csd.raw_sectors[2],
+	card->ext_csd.raw_sectors[1], card->ext_csd.raw_sectors[0]);
+//<ASUS_BSP +++ Hank2_Liu 20170302> Add EMMC Node for ATD ------
+
 static struct attribute *mmc_std_attrs[] = {
 	&dev_attr_cid.attr,
 	&dev_attr_csd.attr,
@@ -831,6 +998,16 @@ static struct attribute *mmc_std_attrs[] = {
 	&dev_attr_raw_rpmb_size_mult.attr,
 	&dev_attr_enhanced_rpmb_supported.attr,
 	&dev_attr_rel_sectors.attr,
+
+	//ASUS_BSP jessie_tian:add emmc info && total_size+++
+	&dev_attr_emmc_status.attr,
+	&dev_attr_emmc_fw_version.attr,
+	&dev_attr_emmc_total_size.attr,
+	//ASUS_BSP jessie_tian:add emmc info && total_size---
+	//<ASUS_BSP +++ Hank2_Liu 20170302> Add EMMC Node for ATD ++++++
+	&dev_attr_emmc_prv.attr,
+	&dev_attr_emmc_size.attr,
+	//<ASUS_BSP +++ Hank2_Liu 20170302> Add EMMC Node for ATD ------
 	NULL,
 };
 ATTRIBUTE_GROUPS(mmc_std);
@@ -2075,6 +2252,7 @@ reinit:
 		}
 	}
 
+	mmc_dump_status(card);
 	return 0;
 
 free_card:
@@ -2804,3 +2982,32 @@ err:
 
 	return err;
 }
+
+//ASUS_BSP Hank2_Liu 20161202 : Add proc file node to read emmc health status +++
+static int emmc_health_proc_read(struct seq_file *buf, void *v)
+{
+
+	return seq_printf(buf, "0x%02x", storage_primary_health);
+}
+
+static int emmc_health_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, emmc_health_proc_read, NULL);
+}
+
+void create_emmc_health_proc_file(void)
+{
+	static const struct file_operations proc_fops = {
+		.owner = THIS_MODULE,
+		.open =  emmc_health_proc_open,
+		.read = seq_read,
+	};
+	struct proc_dir_entry *proc_file = proc_create("storage_primary_health", 0444, NULL, &proc_fops);
+
+	if (!proc_file) {
+		printk("[eMMC]%s failed!\n", __FUNCTION__);
+	}
+	return;
+}
+EXPORT_SYMBOL(create_emmc_health_proc_file);
+//ASUS_BSP Hank2_Liu 20161202 : Add proc file node to read emmc health status ---

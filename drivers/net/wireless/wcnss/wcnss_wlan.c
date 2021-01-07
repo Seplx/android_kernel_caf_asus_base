@@ -57,6 +57,9 @@
 #define IS_CAL_DATA_PRESENT     0
 #define WAIT_FOR_CBC_IND     2
 
+static char *wcnss_ready = NULL;
+module_param(wcnss_ready, charp, S_IRUGO | S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+
 /* module params */
 #define WCNSS_CONFIG_UNSPECIFIED (-1)
 #define UINT32_MAX (0xFFFFFFFFU)
@@ -76,6 +79,18 @@ MODULE_PARM_DESC(has_autodetect_xo, "Perform auto detect to configure IRIS XO");
 static int do_not_cancel_vote = WCNSS_CONFIG_UNSPECIFIED;
 module_param(do_not_cancel_vote, int, S_IWUSR | S_IRUGO);
 MODULE_PARM_DESC(do_not_cancel_vote, "Do not cancel votes for wcnss");
+
+static int do_softap_band = 0;
+module_param(do_softap_band, int, S_IWUSR | S_IRUGO);
+MODULE_PARM_DESC(do_softap_band, "Is the softap band flag");
+
+static int do_wifi_driver_debug =0;
+module_param(do_wifi_driver_debug,int,S_IWUSR | S_IRUGO);
+MODULE_PARM_DESC(do_wifi_driver_debug, "do wifi driver debug flag");
+
+static char *wcnss_build_version = "unknown";
+module_param(wcnss_build_version, charp, S_IRUGO);
+MODULE_PARM_DESC(wcnss_build_version, "wcnss build version");
 
 static DEFINE_SPINLOCK(reg_spinlock);
 
@@ -246,7 +261,13 @@ static struct notifier_block wnb = {
 	.notifier_call = wcnss_notif_cb,
 };
 
-#define NVBIN_FILE "wlan/prima/WCNSS_qcom_wlan_nv.bin"
+#define NVBIN_FILE_DEFAULT     "wlan/prima/WCNSS_qcom_wlan_nv.bin"
+#define NVBIN_FILE_PHOENIX     "wlan/prima/WCNSS_qcom_wlan_nv_Phoenix.bin"
+#define NVBIN_FILE_HADES_CA    "wlan/prima/WCNSS_qcom_wlan_nv_Hades_CA.bin"
+#define NVBIN_FILE_HADES_NONCA "wlan/prima/WCNSS_qcom_wlan_nv_Hades_nonCA.bin"
+#define NVBIN_FILE_AQUARIUS    "wlan/prima/WCNSS_qcom_wlan_nv_Aquarius.bin"
+static char *kernel_nvbin_ptr = NULL;
+#define NVBIN_FILE             kernel_nvbin_ptr
 
 /* On SMD channel 4K of maximum data can be transferred, including message
  * header, so NV fragment size as next multiple of 1Kb is 3Kb.
@@ -396,7 +417,6 @@ static struct {
 	int	user_cal_available;
 	u32	user_cal_rcvd;
 	int	user_cal_exp_size;
-	int	device_opened;
 	int	iris_xo_mode_set;
 	int	fw_vbatt_state;
 	char	wlan_nv_macAddr[WLAN_MAC_ADDR_SIZE];
@@ -467,6 +487,22 @@ static ssize_t wcnss_wlan_macaddr_show(struct device *dev,
 
 static DEVICE_ATTR(wcnss_mac_addr, S_IRUSR | S_IWUSR,
 	wcnss_wlan_macaddr_show, wcnss_wlan_macaddr_store);
+
+
+int wcnss_get_softap_band(void)
+{
+       pr_info("[wcnss]: do_softap_band=%d.\n", do_softap_band);
+       return do_softap_band;
+}
+EXPORT_SYMBOL(wcnss_get_softap_band);
+
+//ASUS_BSP++ "add for more wlan driver log when debug"
+int wcnss_get_wifi_driver_debug_flag(void)
+{
+       return do_wifi_driver_debug;
+}
+EXPORT_SYMBOL(wcnss_get_wifi_driver_debug_flag);
+//ASUS_BSP-- "add for more wlan driver log when debug"
 
 static ssize_t wcnss_serial_number_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
@@ -2236,6 +2272,9 @@ static void wcnss_process_smd_msg(int len)
 		}
 		build[len] = 0;
 		pr_info("wcnss: build version %s\n", build);
+		strncpy(wcnss_build_version, build, WCNSS_MAX_BUILD_VER_LEN);
+		wcnss_build_version[WCNSS_MAX_BUILD_VER_LEN] = '\0';
+		
 		break;
 
 	case WCNSS_NVBIN_DNLD_RSP:
@@ -2378,6 +2417,33 @@ static void wcnss_nvbin_dnld(void)
 	struct device *dev = &penv->pdev->dev;
 
 	down_read(&wcnss_pm_sem);
+
+	// Dynamic choose NV file >>
+	switch(asus_project_id) {
+#if defined(ZD552KL_PHOENIX)
+		case ASUS_ZD552KL_PHOENIX:
+			NVBIN_FILE = NVBIN_FILE_PHOENIX;
+			break;
+#elif defined(ZE553KL)
+		case ASUS_ZE553KL:
+			if (asus_rf_id == ASUS_TW_JP || asus_rf_id == ASUS_CN6)
+			{
+				NVBIN_FILE = NVBIN_FILE_HADES_CA;
+			} else {
+				NVBIN_FILE = NVBIN_FILE_HADES_NONCA;
+			}
+			break;
+#elif defined(ZS550KL)
+		case ASUS_ZS550KL:
+			NVBIN_FILE = NVBIN_FILE_AQUARIUS;
+			break;
+#endif
+		default:
+			NVBIN_FILE = NVBIN_FILE_DEFAULT;
+			break;
+	}
+	pr_info("wcnss: choose NV file %s\n", NVBIN_FILE);
+	// <<
 
 	ret = request_firmware(&nv, NVBIN_FILE, dev);
 
@@ -3297,14 +3363,6 @@ static int wcnss_node_open(struct inode *inode, struct file *file)
 			return -EFAULT;
 	}
 
-	mutex_lock(&penv->dev_lock);
-	penv->user_cal_rcvd = 0;
-	penv->user_cal_read = 0;
-	penv->user_cal_available = false;
-	penv->user_cal_data = NULL;
-	penv->device_opened = 1;
-	mutex_unlock(&penv->dev_lock);
-
 	return rc;
 }
 
@@ -3313,7 +3371,7 @@ static ssize_t wcnss_wlan_read(struct file *fp, char __user
 {
 	int rc = 0;
 
-	if (!penv || !penv->device_opened)
+	if (!penv)
 		return -EFAULT;
 
 	rc = wait_event_interruptible(penv->read_wait, penv->fw_cal_rcvd
@@ -3350,55 +3408,66 @@ static ssize_t wcnss_wlan_write(struct file *fp, const char __user
 			*user_buffer, size_t count, loff_t *position)
 {
 	int rc = 0;
-	u32 size = 0;
+	char *cal_data = NULL;
 
-	if (!penv || !penv->device_opened || penv->user_cal_available)
+	if (!penv || penv->user_cal_available)
 		return -EFAULT;
 
-	if (penv->user_cal_rcvd == 0 && count >= 4
-			&& !penv->user_cal_data) {
-		rc = copy_from_user((void *)&size, user_buffer, 4);
-		if (!size || size > MAX_CALIBRATED_DATA_SIZE) {
-			pr_err(DEVICE " invalid size to write %d\n", size);
+	if (!penv->user_cal_rcvd && count >= 4 && !penv->user_cal_exp_size) {
+		mutex_lock(&penv->dev_lock);
+		rc = copy_from_user((void *)&penv->user_cal_exp_size,
+				    user_buffer, 4);
+		if (!penv->user_cal_exp_size ||
+		    penv->user_cal_exp_size > MAX_CALIBRATED_DATA_SIZE) {
+			pr_err(DEVICE " invalid size to write %d\n",
+			       penv->user_cal_exp_size);
+			penv->user_cal_exp_size = 0;
+			mutex_unlock(&penv->dev_lock);
 			return -EFAULT;
 		}
-
-		rc += count;
-		count -= 4;
-		penv->user_cal_exp_size =  size;
-		penv->user_cal_data = kmalloc(size, GFP_KERNEL);
-		if (penv->user_cal_data == NULL) {
-			pr_err(DEVICE " no memory to write\n");
-			return -ENOMEM;
-		}
-		if (0 == count)
-			goto exit;
-
-	} else if (penv->user_cal_rcvd == 0 && count < 4)
+		mutex_unlock(&penv->dev_lock);
+		return count;
+	} else if (!penv->user_cal_rcvd && count < 4) {
 		return -EFAULT;
+	}
 
+	mutex_lock(&penv->dev_lock);
 	if ((UINT32_MAX - count < penv->user_cal_rcvd) ||
 		(penv->user_cal_exp_size < count + penv->user_cal_rcvd)) {
 		pr_err(DEVICE " invalid size to write %zu\n", count +
 				penv->user_cal_rcvd);
-		rc = -ENOMEM;
-		goto exit;
+		mutex_unlock(&penv->dev_lock);
+		return -ENOMEM;
 	}
-	rc = copy_from_user((void *)penv->user_cal_data +
-			penv->user_cal_rcvd, user_buffer, count);
-	if (0 == rc) {
+
+	cal_data = kmalloc(count, GFP_KERNEL);
+	if (!cal_data) {
+		mutex_unlock(&penv->dev_lock);
+		return -ENOMEM;
+	}
+
+	rc = copy_from_user(cal_data, user_buffer, count);
+	if (!rc) {
+		memcpy(penv->user_cal_data + penv->user_cal_rcvd,
+		       cal_data, count);
 		penv->user_cal_rcvd += count;
 		rc += count;
 	}
+
+	kfree(cal_data);
 	if (penv->user_cal_rcvd == penv->user_cal_exp_size) {
 		penv->user_cal_available = true;
 		pr_info_ratelimited("wcnss: user cal written");
 	}
+	mutex_unlock(&penv->dev_lock);
 
-exit:
 	return rc;
 }
 
+static int wcnss_node_release(struct inode *inode, struct file *file)
+{
+	return 0;
+}
 
 static int wcnss_notif_cb(struct notifier_block *this, unsigned long code,
 				void *ss_handle)
@@ -3427,6 +3496,10 @@ static int wcnss_notif_cb(struct notifier_block *this, unsigned long code,
 			msleep(20);
 			wcnss_wlan_power(&pdev->dev, pwlanconfig,
 					WCNSS_WLAN_SWITCH_OFF, NULL);
+			pr_info("[wcnss]: Cancel APPS vote for Iris & WCNSS.\n");
+			sprintf((char *)(wcnss_ready), "1");
+			printk("[wcnss]: wcnss_ready=1.\n");
+			/*--------------------------------------------------*/
 		}
 	} else if ((code == SUBSYS_BEFORE_SHUTDOWN && data && data->crashed) ||
 			code == SUBSYS_SOC_RESET) {
@@ -3457,6 +3530,7 @@ static const struct file_operations wcnss_node_fops = {
 	.open = wcnss_node_open,
 	.read = wcnss_wlan_read,
 	.write = wcnss_wlan_write,
+	.release = wcnss_node_release,
 };
 
 static struct miscdevice wcnss_misc = {
@@ -3484,6 +3558,13 @@ wcnss_wlan_probe(struct platform_device *pdev)
 	}
 	penv->pdev = pdev;
 
+	penv->user_cal_data =
+		devm_kzalloc(&pdev->dev, MAX_CALIBRATED_DATA_SIZE, GFP_KERNEL);
+	if (!penv->user_cal_data) {
+		dev_err(&pdev->dev, "Failed to alloc memory for cal data.\n");
+		return -ENOMEM;
+	}
+
 	/* register sysfs entries */
 	ret = wcnss_create_sysfs(&pdev->dev);
 	if (ret) {
@@ -3503,6 +3584,11 @@ wcnss_wlan_probe(struct platform_device *pdev)
 	mutex_init(&penv->vbat_monitor_mutex);
 	mutex_init(&penv->pm_qos_mutex);
 	init_waitqueue_head(&penv->read_wait);
+
+	penv->user_cal_rcvd = 0;
+	penv->user_cal_read = 0;
+	penv->user_cal_exp_size = 0;
+	penv->user_cal_available = false;
 
 	/* Since we were built into the kernel we'll be called as part
 	 * of kernel initialization.  We don't know if userspace
@@ -3563,6 +3649,23 @@ static int __init wcnss_wlan_init(void)
 	platform_driver_register(&wcnss_ctrl_driver);
 	register_pm_notifier(&wcnss_pm_notifier);
 
+	/*--------------------------------------------------*/
+	wcnss_ready = (char *) kmalloc(32, GFP_KERNEL);
+	if( wcnss_ready == NULL ) {
+		printk("[wcnss]: wcnss_ready, malloc(32) fail.\n");
+	}
+	else {
+		memset( wcnss_ready, 0, 32 );
+	}
+	/*--------------------------------------------------*/
+	wcnss_build_version = (char *) kmalloc(WCNSS_MAX_BUILD_VER_LEN+1, GFP_KERNEL);
+	if( wcnss_build_version == NULL )
+		printk("[wcnss]: wcnss_build_version, kmalloc fail.\n");
+	else
+		memset( wcnss_build_version, 0, WCNSS_MAX_BUILD_VER_LEN+1 );
+
+	pr_info("[wcnss]: do_softap_band=%d.\n", do_softap_band);
+	pr_info("[wcnss]: wcnss_wlan_init -.\n");
 	return 0;
 }
 

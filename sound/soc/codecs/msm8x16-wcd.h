@@ -55,6 +55,9 @@
 #define DEFAULT_MULTIPLIER 800
 #define DEFAULT_GAIN 9
 #define DEFAULT_OFFSET 100
+ //ASUS_BSP +++ tyree_liu@asus.com  add for codec_status
+extern int codec_status;
+//ASUS_BSP +++ tyree_liu@asus.com  add for codec_status
 
 extern const u8 msm8x16_wcd_reg_readable[MSM8X16_WCD_CACHE_SIZE];
 extern const u8 msm8x16_wcd_reg_readonly[MSM8X16_WCD_CACHE_SIZE];

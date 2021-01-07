@@ -181,6 +181,10 @@ struct devfreq {
 };
 
 #if defined(CONFIG_PM_DEVFREQ)
+extern int governor_check(const char *devname ,char *governor_name);
+extern int governor_change(const char *devname,char * governor_name);
+
+
 extern struct devfreq *devfreq_add_device(struct device *dev,
 				  struct devfreq_dev_profile *profile,
 				  const char *governor_name,
@@ -234,6 +238,16 @@ struct devfreq_simple_ondemand_data {
 #endif
 
 #else /* !CONFIG_PM_DEVFREQ */
+static inline int governor_check(const char *devname ,char *governor_name)
+{
+	return 0;
+}
+
+static inline int governor_change(const char *devname,char * governor_name)
+{
+	return 0;
+}
+
 static inline struct devfreq *devfreq_add_device(struct device *dev,
 					  struct devfreq_dev_profile *profile,
 					  const char *governor_name,

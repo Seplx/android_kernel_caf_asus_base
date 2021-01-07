@@ -20,7 +20,7 @@
 / {
 	model = "Qualcomm Technologies, Inc. MSM8953 RCM";
 	compatible = "qcom,msm8953-cdp", "qcom,msm8953", "qcom,cdp";
-	qcom,board-id= <21 0>;
+	qcom,board-id= <8 0>;
 };
 
 &soc {

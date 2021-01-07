@@ -46,6 +46,8 @@ MODULE_LICENSE("GPL");
 extern struct builtin_fw __start_builtin_fw[];
 extern struct builtin_fw __end_builtin_fw[];
 
+extern int asus_project_id;
+
 static bool fw_get_builtin_firmware(struct firmware *fw, const char *name)
 {
 	struct builtin_fw *b_fw;
@@ -1945,6 +1947,25 @@ static void __init fw_cache_init(void)
 	register_pm_notifier(&fw_cache.pm_notify);
 
 	register_syscore_ops(&fw_syscore_ops);
+
+       if(asus_project_id == ASUS_ZS550KL) // Aquarius ZS550KL
+       {
+               strcpy(fw_path_para, "/etc/firmware/ZS550KL");
+               printk("fw_cache_init fw_path_para: %s\n", fw_path_para);
+       }
+       else if(asus_project_id == ASUS_ZD552KL_PHOENIX)
+       {
+               strcpy(fw_path_para, "/etc/firmware/ZD552KL_PHOENIX");
+               printk("fw_cache_init fw_path_para: %s\n", fw_path_para);
+       }else if(asus_project_id == ASUS_ZE553KL)
+       {
+               strcpy(fw_path_para, "/etc/firmware/ZE553KL");
+               printk("fw_cache_init fw_path_para: %s\n", fw_path_para);
+       }
+       else { //default 
+               strcpy(fw_path_para, "/etc/firmware/ZS550KL");
+               printk("fw_cache_init fw_path_para: %s\n", fw_path_para);
+       }
 #endif
 }
 

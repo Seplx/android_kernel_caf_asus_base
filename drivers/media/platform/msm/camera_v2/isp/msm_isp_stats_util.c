@@ -68,8 +68,7 @@ static int msm_isp_stats_cfg_ping_pong_address(struct vfe_device *vfe_dev,
 	pingpong_bit = (~(pingpong_status >> stats_pingpong_offset) & 0x1);
 
 	rc = vfe_dev->buf_mgr->ops->get_buf(vfe_dev->buf_mgr,
-			vfe_dev->pdev->id, bufq_handle,
-			MSM_ISP_INVALID_BUF_INDEX, &buf);
+			vfe_dev->pdev->id, bufq_handle, &buf);
 	if (rc == -EFAULT) {
 		msm_isp_halt_send_error(vfe_dev, ISP_EVENT_BUF_FATAL_ERROR);
 		return rc;
@@ -865,6 +864,12 @@ int msm_isp_update_stats_stream(struct vfe_device *vfe_dev, void *arg)
 	struct msm_vfe_axi_stream_update_cmd *update_cmd = arg;
 	struct msm_vfe_axi_stream_cfg_update_info *update_info = NULL;
 	struct msm_isp_sw_framskip *sw_skip_info = NULL;
+
+	if (update_cmd->num_streams > MSM_ISP_STATS_MAX) {
+		pr_err("%s: Invalid num_streams %d\n",
+			__func__, update_cmd->num_streams);
+		return -EINVAL;
+	}
 
 	/*validate request*/
 	for (i = 0; i < update_cmd->num_streams; i++) {

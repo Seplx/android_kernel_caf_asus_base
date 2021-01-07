@@ -262,6 +262,17 @@ struct dwc3_msm {
 static void dwc3_pwr_event_handler(struct dwc3_msm *mdwc);
 static int dwc3_msm_gadget_vbus_draw(struct dwc3_msm *mdwc, unsigned mA);
 
+#ifdef ZD552KL_PHOENIX
+static struct dwc3_msm *the_mdwc = NULL;
+int is_msm_dwc_in_otg_host_state(void)
+{
+	if(the_mdwc)
+		return (the_mdwc->in_host_mode);
+	else
+		return 0;
+}
+EXPORT_SYMBOL_GPL(is_msm_dwc_in_otg_host_state);
+#endif
 /**
  *
  * Read register with debug info.
@@ -2385,7 +2396,7 @@ static irqreturn_t msm_dwc3_pwr_irq(int irq, void *data)
 	dwc3_pwr_event_handler(mdwc);
 	return IRQ_HANDLED;
 }
-
+extern bool usb_alert_suspend;
 static int dwc3_msm_power_get_property_usb(struct power_supply *psy,
 				  enum power_supply_property psp,
 				  union power_supply_propval *val)
@@ -2406,7 +2417,10 @@ static int dwc3_msm_power_get_property_usb(struct power_supply *psy,
 		val->intval = mdwc->vbus_active;
 		break;
 	case POWER_SUPPLY_PROP_ONLINE:
-		val->intval = mdwc->online;
+		if(usb_alert_suspend ==1)
+			val->intval = 0;
+		else
+			val->intval = mdwc->online;
 		break;
 	case POWER_SUPPLY_PROP_TYPE:
 		val->intval = psy->type;
@@ -3080,7 +3094,9 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		mdwc->id_state = DWC3_ID_GROUND;
 		dwc3_ext_event_notify(mdwc);
 	}
-
+#ifdef ZD552KL_PHOENIX
+	the_mdwc = mdwc;
+#endif
 	return 0;
 
 put_dwc3:
@@ -3206,10 +3222,14 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 	if (on) {
 		dev_dbg(mdwc->dev, "%s: turn on host\n", __func__);
 
+		// ASUS_BSP "Support using different set of PHY parameters for USB Host"
+		// Here we set the host flag earlier in order for PHY init using Host parameters
+		mdwc->hs_phy->flags |= PHY_HOST_MODE;
+		wmb();
 		pm_runtime_get_sync(mdwc->dev);
 		dbg_event(0xFF, "StrtHost gync",
 			atomic_read(&mdwc->dev->power.usage_count));
-		mdwc->hs_phy->flags |= PHY_HOST_MODE;
+		//mdwc->hs_phy->flags |= PHY_HOST_MODE;
 		mdwc->ss_phy->flags |= PHY_HOST_MODE;
 		usb_phy_notify_connect(mdwc->hs_phy, USB_SPEED_HIGH);
 		if (!IS_ERR(mdwc->vbus_reg))
@@ -3398,7 +3418,7 @@ skip_psy_type:
 	if (mdwc->max_power == mA)
 		return 0;
 
-	dev_info(mdwc->dev, "Avail curr from USB = %u\n", mA);
+	dev_dbg(mdwc->dev, "Avail curr from USB = %u\n", mA);
 
 	if (mdwc->max_power <= 2 && mA > 2) {
 		/* Enable Charging */
@@ -3429,6 +3449,7 @@ psy_error:
 	return -ENXIO;
 }
 
+extern bool phy_detect_float_ok;
 static void dwc3_check_float_lines(struct dwc3_msm *mdwc)
 {
 	int dpdm;
@@ -3439,8 +3460,12 @@ static void dwc3_check_float_lines(struct dwc3_msm *mdwc)
 
 	/* Get linestate with Idp_src enabled */
 	dpdm = usb_phy_dpdm_with_idp_src(mdwc->hs_phy);
-	if (dpdm == 0x2) {
+	printk("[CHARGE] sdp run DCD dpdm =%d\n",dpdm);
+	if ((dpdm == 0x2) || (dpdm == 0x3)) {
+	//if (dpdm == 0x2) {
 		/* DP is HIGH = lines are floating */
+		phy_detect_float_ok = true;
+		pr_debug("[CHARGE] phy_detect_float_ok =%d\n",phy_detect_float_ok);
 		mdwc->chg_type = DWC3_PROPRIETARY_CHARGER;
 		mdwc->otg_state = OTG_STATE_B_IDLE;
 		pm_runtime_put_sync(mdwc->dev);
@@ -3570,7 +3595,7 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 				pm_runtime_get_noresume(mdwc->dev);
 				dwc3_initialize(mdwc);
 				/* check dp/dm for SDP & runtime_put if !SDP */
-				if (mdwc->detect_dpdm_floating) {
+				if ((mdwc->detect_dpdm_floating) && ( mdwc->chg_type == DWC3_SDP_CHARGER)){
 					dwc3_check_float_lines(mdwc);
 					if (mdwc->chg_type != DWC3_SDP_CHARGER)
 						break;
@@ -3634,6 +3659,7 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 				/* check dp/dm for SDP & runtime_put if !SDP */
 				if (mdwc->detect_dpdm_floating &&
 				    mdwc->chg_type == DWC3_SDP_CHARGER) {
+					pr_debug("[CHARGE] sdp run DCD\n");
 					dwc3_check_float_lines(mdwc);
 					if (mdwc->chg_type != DWC3_SDP_CHARGER)
 						break;

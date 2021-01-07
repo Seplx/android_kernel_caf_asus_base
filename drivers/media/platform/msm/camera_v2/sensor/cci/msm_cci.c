@@ -23,6 +23,9 @@
 #include "msm_camera_io_util.h"
 #include "msm_camera_dt_util.h"
 #include "cam_hw_ops.h"
+#include "msm_sensor.h"
+
+DEFINE_MSM_MUTEX(msm_cci_mutex); //ASUS_BSP +++
 
 #define V4L2_IDENT_CCI 50005
 #define CCI_I2C_QUEUE_0_SIZE 64
@@ -32,7 +35,7 @@
 #define CYCLES_PER_MICRO_SEC_DEFAULT 4915
 #define CCI_MAX_DELAY 1000000
 
-#define CCI_TIMEOUT msecs_to_jiffies(500)
+#define CCI_TIMEOUT msecs_to_jiffies(1500)
 
 /* TODO move this somewhere else */
 #define MSM_CCI_DRV_NAME "msm_cci"
@@ -782,18 +785,10 @@ static int32_t msm_cci_i2c_read(struct v4l2_subdev *sd,
 	enum cci_i2c_queue_t queue = QUEUE_1;
 	struct cci_device *cci_dev = NULL;
 	struct msm_camera_cci_i2c_read_cfg *read_cfg = NULL;
-
 	CDBG("%s line %d\n", __func__, __LINE__);
 	cci_dev = v4l2_get_subdevdata(sd);
 	master = c_ctrl->cci_info->cci_i2c_master;
 	read_cfg = &c_ctrl->cfg.cci_i2c_read_cfg;
-
-	if (master >= MASTER_MAX || master < 0) {
-		pr_err("%s:%d Invalid I2C master %d\n",
-			__func__, __LINE__, master);
-		return -EINVAL;
-	}
-
 	mutex_lock(&cci_dev->cci_master_info[master].mutex_q[queue]);
 
 	/* Set the I2C Frequency */
@@ -1018,6 +1013,11 @@ static int32_t msm_cci_i2c_write(struct v4l2_subdev *sd,
 	enum cci_i2c_master_t master;
 
 	cci_dev = v4l2_get_subdevdata(sd);
+	if (c_ctrl->cci_info->cci_i2c_master >= MASTER_MAX
+			|| c_ctrl->cci_info->cci_i2c_master < 0) {
+		pr_err("%s:%d Invalid I2C master addr\n", __func__, __LINE__);
+		return -EINVAL;
+	}
 	if (cci_dev->cci_state != CCI_STATE_ENABLED) {
 		pr_err("%s invalid cci state %d\n",
 			__func__, cci_dev->cci_state);
@@ -1555,11 +1555,6 @@ static int32_t msm_cci_write(struct v4l2_subdev *sd,
 		return rc;
 	}
 
-	if (c_ctrl->cci_info->cci_i2c_master >= MASTER_MAX
-			|| c_ctrl->cci_info->cci_i2c_master < 0) {
-		pr_err("%s:%d Invalid I2C master addr\n", __func__, __LINE__);
-		return -EINVAL;
-	}
 	master = c_ctrl->cci_info->cci_i2c_master;
 	cci_master_info = &cci_dev->cci_master_info[master];
 
@@ -1598,11 +1593,87 @@ static int32_t msm_cci_write(struct v4l2_subdev *sd,
 	}
 	return rc;
 }
+#ifdef ZE553KL
+//ASUS_BSP +++ Zhengwei_Cai "OIS block other i2c command"
+static uint8_t is_imx362_start_or_stop_stream_command(struct msm_camera_cci_ctrl *cci_ctrl, uint16_t* on)
+{
+	if(cci_ctrl->cmd == MSM_CCI_I2C_WRITE ||
+	   cci_ctrl->cmd == MSM_CCI_I2C_WRITE_SEQ ||
+	   cci_ctrl->cmd == MSM_CCI_I2C_WRITE_SYNC ||
+	   cci_ctrl->cmd == MSM_CCI_I2C_WRITE_ASYNC ||
+	   cci_ctrl->cmd == MSM_CCI_I2C_WRITE_SYNC_BLOCK
+	   )
+	{
+		#if 0
+		int i;
+		for(i=0;i<cci_ctrl->cfg.cci_i2c_write_cfg.size;i++)
+			pr_info("sz_cam_ois_block_i2c, imx362 write size %d, [%d] addr 0x%x, data 0x%x\n",
+				cci_ctrl->cfg.cci_i2c_write_cfg.size,
+				i,
+				cci_ctrl->cfg.cci_i2c_write_cfg.reg_setting[i].reg_addr,
+				cci_ctrl->cfg.cci_i2c_write_cfg.reg_setting[i].reg_data
+			);
+		#endif
+		if(cci_ctrl->cfg.cci_i2c_write_cfg.size == 1 && cci_ctrl->cfg.cci_i2c_write_cfg.reg_setting->reg_addr == 0x0100)
+		{
+			*on = cci_ctrl->cfg.cci_i2c_write_cfg.reg_setting->reg_data;
+			pr_info("sz_cam_ois_block_i2c, detect imx362 %s stream command\n",*on ?"Start":"Stop");
+			return 1;
+		}
+	}
+	return 0;
+}
+extern struct msm_sensor_ctrl_t ** get_msm_sensor_ctrls(void);
+static uint8_t ignore_i2c_cmd(struct msm_camera_cci_ctrl *cci_ctrl)
+{
+	uint8_t imx362_start_stop_preview_detected = 0;
+	uint16_t reg_data = 0xeeee;
 
+	uint8_t ignore = -1;
+	struct msm_sensor_ctrl_t ** sensor_controls = get_msm_sensor_ctrls();
+
+	//NOT ignore IMX362 start/stop preview command
+	if(sensor_controls[CAMERA_0]->sensor_state == MSM_SENSOR_POWER_UP)
+	{
+		if(cci_ctrl->cci_info->sid == 0x1A && is_imx362_start_or_stop_stream_command(cci_ctrl,&reg_data))
+		{
+			imx362_start_stop_preview_detected = 1;
+			pr_info("sz_cam_ois_block_i2c: %s preview command detect!\n",
+					reg_data == 0x00 ? "Stop":"Start"
+					);
+		}
+	}
+
+	//IMX362 START/STOP Preview or OIS Command
+	if(imx362_start_stop_preview_detected || cci_ctrl->cci_info->sid == 0x24)
+	{
+		ignore = 0;
+	}
+	else
+	{
+		ignore = 1;
+		//pr_info("sz_cam_ois_block_i2c: block slave id 0x%x i2c command\n",cci_ctrl->cci_info->sid);
+	}
+
+	return ignore;
+}
+
+extern uint8_t g_ois_i2c_block_other;
+//ASUS_BSP --- Zhengwei_Cai "OIS block other i2c command"
+
+static void fix_rumba(struct msm_camera_cci_ctrl *cci_ctrl)
+{
+	if(cci_ctrl->cci_info->sid == 0x24)
+	{
+		usleep_range(2*1000,2*1000);
+	}
+}
+#endif
 static int32_t msm_cci_config(struct v4l2_subdev *sd,
 	struct msm_camera_cci_ctrl *cci_ctrl)
 {
 	int32_t rc = 0;
+	mutex_lock(&msm_cci_mutex); //ASUS_BSP +++
 	CDBG("%s line %d cmd %d\n", __func__, __LINE__,
 		cci_ctrl->cmd);
 	switch (cci_ctrl->cmd) {
@@ -1613,14 +1684,42 @@ static int32_t msm_cci_config(struct v4l2_subdev *sd,
 		rc = msm_cci_release(sd);
 		break;
 	case MSM_CCI_I2C_READ:
+#ifdef ZE553KL
+		//ASUS_BSP +++ Zhengwei_Cai "OIS block other i2c command"
+		if(g_ois_i2c_block_other && ignore_i2c_cmd(cci_ctrl))
+		{
+			rc = 0;
+		}
+		else
+		{
+			fix_rumba(cci_ctrl);
+			rc = msm_cci_i2c_read_bytes(sd, cci_ctrl);
+		}
+		//ASUS_BSP --- Zhengwei_Cai "OIS block other i2c command"
+#else
 		rc = msm_cci_i2c_read_bytes(sd, cci_ctrl);
+#endif
 		break;
 	case MSM_CCI_I2C_WRITE:
 	case MSM_CCI_I2C_WRITE_SEQ:
 	case MSM_CCI_I2C_WRITE_SYNC:
 	case MSM_CCI_I2C_WRITE_ASYNC:
 	case MSM_CCI_I2C_WRITE_SYNC_BLOCK:
+#ifdef ZE553KL
+		//ASUS_BSP +++ Zhengwei_Cai "OIS block other i2c command"
+		if(g_ois_i2c_block_other && ignore_i2c_cmd(cci_ctrl))
+		{
+			rc = 0;
+		}
+		else
+		{
+			fix_rumba(cci_ctrl);
+			rc = msm_cci_write(sd, cci_ctrl);
+		}
+		//ASUS_BSP --- Zhengwei_Cai "OIS block other i2c command"
+#else
 		rc = msm_cci_write(sd, cci_ctrl);
+#endif
 		break;
 	case MSM_CCI_GPIO_WRITE:
 		break;
@@ -1631,6 +1730,7 @@ static int32_t msm_cci_config(struct v4l2_subdev *sd,
 	default:
 		rc = -ENOIOCTLCMD;
 	}
+	mutex_unlock(&msm_cci_mutex); //ASUS_BSP+++
 	CDBG("%s line %d rc %d\n", __func__, __LINE__, rc);
 	cci_ctrl->status = rc;
 	return rc;

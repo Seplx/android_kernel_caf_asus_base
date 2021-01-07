@@ -60,6 +60,12 @@ static bool mdss_check_te_status(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
  * command. If DSI controller fails to acknowledge the BTA command, it sends
  * the PANEL_ALIVE=0 status to HAL layer.
  */
+//<ASUS-BSP Robert_He 20170505> add esd check suspend/resume logic ++++++
+bool ESD_SUSPEND_TOUCH = false;
+EXPORT_SYMBOL(ESD_SUSPEND_TOUCH);
+bool ESD_SUSPEND_CAP   = false;
+EXPORT_SYMBOL(ESD_SUSPEND_CAP);
+//<ASUS-BSP Robert_He 20170505> add esd check suspend/resume logic ------
 void mdss_check_dsi_ctrl_status(struct work_struct *work, uint32_t interval)
 {
 	struct dsi_status_data *pstatus_data = NULL;
@@ -184,5 +190,9 @@ void mdss_check_dsi_ctrl_status(struct work_struct *work, uint32_t interval)
 	return;
 
 status_dead:
+//<ASUS-BSP Robert_He 20170505> add esd check suspend/resume logic ++++++
+	ESD_SUSPEND_TOUCH = true;
+	ESD_SUSPEND_CAP   = true;
+//<ASUS-BSP Robert_He 20170505> add esd check suspend/resume logic ++++++
 	mdss_fb_report_panel_dead(pstatus_data->mfd);
 }

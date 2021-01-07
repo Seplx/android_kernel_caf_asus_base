@@ -16,7 +16,13 @@
 #include <linux/delay.h>
 #include <linux/mdss_io_util.h>
 
+#include "mdss_dsi.h"
+
+
 #define MAX_I2C_CMDS  16
+
+extern struct mdss_panel_data *gdata;
+
 void dss_reg_w(struct dss_io_data *io, u32 offset, u32 value, u32 debug)
 {
 	u32 in_val;
@@ -211,10 +217,12 @@ vreg_get_fail:
 } /* msm_dss_config_vreg */
 EXPORT_SYMBOL(msm_dss_config_vreg);
 
+
 int msm_dss_enable_vreg(struct dss_vreg *in_vreg, int num_vreg, int enable)
 {
 	int i = 0, rc = 0;
 	bool need_sleep;
+	//int ret;
 	if (enable) {
 		for (i = 0; i < num_vreg; i++) {
 			rc = PTR_RET(in_vreg[i].vreg);
@@ -236,6 +244,26 @@ int msm_dss_enable_vreg(struct dss_vreg *in_vreg, int num_vreg, int enable)
 					in_vreg[i].vreg_name);
 				goto vreg_set_opt_mode_fail;
 			}
+//<ASUS-BSP Hank2_Liu 20160420> Add Boe panel reset seq setup before +/-5.5v power on ++++++	
+			/*if(!(strcmp(in_vreg[i].vreg_name, "lab")))
+			{
+				if(gdata!=NULL)
+				{
+					if(!regulator_is_enabled(in_vreg[i].vreg)){
+						ret = mdss_dsi_panel_reset(gdata, 1);
+						if (ret) {
+								pr_warn("%s: Panel reset failed. rc=%d\n", __func__, ret);
+								ret = 0;
+							}
+						usleep_range(150000,150000);
+					}
+				}else
+				{
+					pr_err("%s: fail!!!!!!\n",__func__);
+				}
+
+			}*/
+//<ASUS-BSP Hank2_Liu 20160420> Add Boe panel reset seq setup before +/-5.5v power on ------	
 			rc = regulator_enable(in_vreg[i].vreg);
 			if (in_vreg[i].post_on_sleep && need_sleep)
 				usleep_range(in_vreg[i].post_on_sleep * 1000,
@@ -254,6 +282,11 @@ int msm_dss_enable_vreg(struct dss_vreg *in_vreg, int num_vreg, int enable)
 					in_vreg[i].pre_off_sleep * 1000);
 			regulator_set_optimum_mode(in_vreg[i].vreg,
 				in_vreg[i].disable_load);
+
+			/*follow qcom code flow:disable vddio for ASUS_ZD552KL_PHOENIX*/
+			if(!(strcmp(in_vreg[i].vreg_name, "vddio")) && (ASUS_ZD552KL_PHOENIX != asus_project_id) && (ASUS_ZE553KL != asus_project_id)){
+				continue;
+			}
 			regulator_disable(in_vreg[i].vreg);
 			if (in_vreg[i].post_off_sleep)
 				usleep_range(in_vreg[i].post_off_sleep * 1000,

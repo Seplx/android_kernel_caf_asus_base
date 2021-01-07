@@ -2164,15 +2164,24 @@ static int sdhci_msm_setup_vreg(struct sdhci_msm_pltfm_data *pdata,
 		goto out;
 	}
 
-	vreg_table[0] = curr_slot->vdd_data;
-	vreg_table[1] = curr_slot->vdd_io_data;
+	if (!strcmp(pdata->name,"mmc1") && !enable) {
+		vreg_table[1] = curr_slot->vdd_data;
+		vreg_table[0] = curr_slot->vdd_io_data;
+	} else {
+		vreg_table[0] = curr_slot->vdd_data;
+		vreg_table[1] = curr_slot->vdd_io_data;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(vreg_table); i++) {
 		if (vreg_table[i]) {
 			if (enable)
 				ret = sdhci_msm_vreg_enable(vreg_table[i]);
-			else
+			else {
+				/* bsp Yudong_Lin: add delay to adjust SD power off sequence */
+				if ((!strcmp(pdata->name, "mmc1")) && (!strcmp(vreg_table[i]->name, "vdd")))
+					msleep(60);
 				ret = sdhci_msm_vreg_disable(vreg_table[i]);
+			}
 			if (ret)
 				goto out;
 		}
@@ -3906,6 +3915,9 @@ static bool sdhci_msm_is_bootdevice(struct device *dev)
 	return true;
 }
 
+//ASUS_BSP Hank2_Liu 20161202 : Add proc file node to read emmc health status +++
+extern void create_emmc_health_proc_file(void);  
+//ASUS_BSP Hank2_Liu 20161202 : Add proc file node to read emmc health status ---
 static int sdhci_msm_probe(struct platform_device *pdev)
 {
 	struct sdhci_host *host;
@@ -3994,6 +4006,12 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 		if (!msm_host->pdata) {
 			dev_err(&pdev->dev, "DT parsing error\n");
 			goto pltfm_free;
+		}
+		/* bsp Yudong_Lin: add host name to pdata */
+		if (!strcmp(mmc_hostname(msm_host->mmc), "mmc1")) {
+			msm_host->pdata->name = "mmc1";
+		} else {
+			msm_host->pdata->name = "mmc0";
 		}
 	} else {
 		dev_err(&pdev->dev, "No device tree node\n");
@@ -4366,7 +4384,11 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 		if (ret)
 			goto remove_max_bus_bw_file;
 	}
-
+	//ASUS_BSP Hank2_Liu 20161202 : Add proc file node to read emmc health status +++
+	if (!strcmp("mmc0",mmc_hostname(host->mmc))) {
+		create_emmc_health_proc_file();
+	}
+	//ASUS_BSP Hank2_Liu 20161202 : Add proc file node to read emmc health status ---
 	msm_host->auto_cmd21_attr.show = show_auto_cmd21;
 	msm_host->auto_cmd21_attr.store = store_auto_cmd21;
 	sysfs_attr_init(&msm_host->auto_cmd21_attr.attr);

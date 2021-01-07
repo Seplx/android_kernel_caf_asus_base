@@ -26,6 +26,8 @@
 #include <linux/delay.h>
 #include <linux/regulator/consumer.h>
 #include <linux/delay.h>
+#include "leds-qpnp.h"
+
 
 #define WLED_MOD_EN_REG(base, n)	(base + 0x60 + n*0x10)
 #define WLED_IDAC_DLY_REG(base, n)	(WLED_MOD_EN_REG(base, n) + 0x01)
@@ -249,6 +251,19 @@
 #define KPDBL_MODULE_EN_MASK		0x80
 #define NUM_KPDBL_LEDS			4
 #define KPDBL_MASTER_BIT_INDEX		0
+//<ASUSBSP Robert_He>20170604 add vkled support for white/black panel+++
+#define VKLED_THRESHOLD  32
+#define VKLED_BLACK_LOW  5
+#define VKLED_BLACK_HIGH 40
+#define VKLED_WHITE_LOW  5
+#define VKLED_WHITE_HIGH 10
+#define BLACK_TP1   "5A"
+#define BLACK_TP2   "5C"
+
+extern char color_id_code[51];
+//<ASUSBSP Robert_He>20170604 add vkled support for white/black panel---
+struct qpnp_led_data *copy_led;
+
 
 /**
  * enum qpnp_leds - QPNP supported led ids
@@ -557,6 +572,8 @@ struct qpnp_led_data {
 };
 
 static DEFINE_MUTEX(flash_lock);
+static DEFINE_MUTEX(green_red_lock);
+
 static struct pwm_device *kpdbl_master;
 static u32 kpdbl_master_period_us;
 DECLARE_BITMAP(kpdbl_leds_in_use, NUM_KPDBL_LEDS);
@@ -860,12 +877,23 @@ static int qpnp_wled_set(struct qpnp_led_data *led)
 	return 0;
 }
 
+static int global_brightness = -1;
+static char global_name[10];
+
 static int qpnp_mpp_set(struct qpnp_led_data *led)
 {
 	int rc;
 	u8 val;
 	int duty_us, duty_ns, period_us;
+	if((global_brightness == led->cdev.brightness) && !strcmp(global_name,led->cdev.name)){
+		printk("[LED] %s skip!\n", __func__);
+		return 0;
+	}
 
+	global_brightness = led->cdev.brightness;
+	strcpy(global_name, led->cdev.name);
+
+	printk("[LED] %s set %s brightness =%d\n",__FUNCTION__,led->cdev.name,led->cdev.brightness);
 	if (led->cdev.brightness) {
 		if (led->mpp_cfg->mpp_reg && !led->mpp_cfg->enable) {
 			rc = regulator_set_voltage(led->mpp_cfg->mpp_reg,
@@ -906,6 +934,7 @@ static int qpnp_mpp_set(struct qpnp_led_data *led)
 		if (led->mpp_cfg->pwm_mode == PWM_MODE) {
 			/*config pwm for brightness scaling*/
 			period_us = led->mpp_cfg->pwm_cfg->pwm_period_us;
+			printk("[LED] %s set %s pwm_us =%d\n",__FUNCTION__,led->cdev.name,led->mpp_cfg->pwm_cfg->pwm_period_us);
 			if (period_us > INT_MAX / NSEC_PER_USEC) {
 				duty_us = (period_us * led->cdev.brightness) /
 					LED_FULL;
@@ -1807,15 +1836,73 @@ static void qpnp_led_set(struct led_classdev *led_cdev,
 		return;
 	}
 
-	if (value > led->cdev.max_brightness)
-		value = led->cdev.max_brightness;
+//<ASUSBSP Robert_He>20170604 add vkled support for white/black panel+++
+	if(!strcmp(led->cdev.name,"button-backlight"))   //20170608 add dev.name to avoid change other dev brightness
+	{
+		if(strncmp(color_id_code, BLACK_TP1, strlen(BLACK_TP1))==0 || strncmp(color_id_code, BLACK_TP2, strlen(BLACK_TP2))==0)
+		{
+			if (value == LED_OFF)
+				value = LED_OFF;
+			else if (value >= VKLED_THRESHOLD)
+				value = VKLED_BLACK_HIGH;
+			else
+				value = VKLED_BLACK_LOW;
+		}
+		else
+		{
+			if (value == LED_OFF)
+				value = LED_OFF;
+			else if (value >= VKLED_THRESHOLD)
+				value = VKLED_WHITE_HIGH;
+			else
+				value = VKLED_WHITE_LOW;
+		}
+	}
+//<ASUSBSP Robert_He>20170604 add vkled support for white/black panel---
+	else{
+		if (value > led->cdev.max_brightness)
+			value = led->cdev.max_brightness;
+	}
 
 	led->cdev.brightness = value;
+	flush_work(&led->work);
 	if (led->in_order_command_processing)
 		queue_work(led->workqueue, &led->work);
 	else
 		schedule_work(&led->work);
 }
+
+void set_button_backlight(bool status)
+{
+	if(status)
+	{
+		printk("[LED] : Virtual Key LED ON\n");
+//<ASUS-BSP Robert_He 20170411> fix nullpointer in SR for there is no led in dtsi  ++++++
+
+		if (copy_led != NULL)
+		{
+			qpnp_led_set(&copy_led->cdev,LED_FULL);
+		}
+		else
+		{
+			printk("[LED]:led point is null, can not set button backlight on\n");
+		}
+	}
+	else
+	{
+		printk("[LED] : Virtual Key LED OFF\n");
+		if (copy_led != NULL)
+		{
+			qpnp_led_set(&copy_led->cdev,LED_OFF);
+		}
+		else
+		{
+			printk("[LED]:led point is null, can not set button backlight off\n");
+		}
+//<ASUS-BSP Robert_He 20170411> fix nullpointer in SR for there is no led in dtsi  ------			
+	}
+}
+EXPORT_SYMBOL_GPL(set_button_backlight);
 
 static void __qpnp_led_work(struct qpnp_led_data *led,
 				enum led_brightness value)
@@ -1883,8 +1970,15 @@ static void qpnp_led_work(struct work_struct *work)
 {
 	struct qpnp_led_data *led = container_of(work,
 					struct qpnp_led_data, work);
+	if(led->id==QPNP_ID_LED_MPP)
+		mutex_lock(&green_red_lock);
+	pr_debug("[LED] %s lock\n", led->cdev.name);
 
 	__qpnp_led_work(led, led->cdev.brightness);
+
+	if(led->id==QPNP_ID_LED_MPP)
+		mutex_unlock(&green_red_lock);
+	pr_debug("[LED] %s unlock\n", led->cdev.name);
 
 	return;
 }
@@ -2228,7 +2322,7 @@ static ssize_t pwm_us_store(struct device *dev,
 	previous_pwm_us = pwm_cfg->pwm_period_us;
 
 	pwm_cfg->pwm_period_us = pwm_us;
-	pwm_free(pwm_cfg->pwm_dev);
+//	pwm_free(pwm_cfg->pwm_dev);
 	ret = qpnp_pwm_init(pwm_cfg, led->spmi_dev, led->cdev.name);
 	if (ret) {
 		pwm_cfg->pwm_period_us = previous_pwm_us;
@@ -3861,6 +3955,8 @@ static int qpnp_leds_probe(struct spmi_device *spmi)
 	int rc, i, num_leds = 0, parsed_leds = 0;
 	const char *led_label;
 	bool regulator_probe = false;
+	
+	pr_debug("[LED] qpnp_leds_probe\n");	
 
 	node = spmi->dev.of_node;
 	if (node == NULL)
@@ -3907,7 +4003,14 @@ static int qpnp_leds_probe(struct spmi_device *spmi)
 				"Failure reading led name, rc = %d\n", rc);
 			goto fail_id_check;
 		}
+		pr_debug("[LED] linux,name : %s\n", led->cdev.name);
 
+		if(!strcmp(led->cdev.name,"button-backlight"))
+		{
+			pr_debug("[LED] : Copy Led structure\n");
+			copy_led = led;
+		}
+		
 		rc = of_property_read_u32(temp, "qcom,max-current",
 			&led->max_current);
 		if (rc < 0) {

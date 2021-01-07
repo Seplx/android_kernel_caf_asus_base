@@ -31,6 +31,19 @@
 #include "../codecs/msm8x16-wcd.h"
 #include "../codecs/wsa881x-analog.h"
 #include <linux/regulator/consumer.h>
+//ASUS_BSP +++ tyree_liu@asus.com  add for codec_status
+#include <linux/proc_fs.h>
+#include <linux/syscalls.h>
+#include <linux/fs.h>
+#include <linux/file.h>
+#include <linux/switch.h>
+struct switch_dev *g_audiowizard_force_preset_sdev = NULL; //sherry ++ for audiowizard
+#define AUDIO_CODEC_PROC_FILE  "driver/audio_codec"
+static struct proc_dir_entry *audio_codec_proc_file;
+int codec_status=0;
+int codec_num=0;
+EXPORT_SYMBOL(codec_status);
+//ASUS_BSP --- tyree_liu@asus.com  add for codec_status
 #define DRV_NAME "msm8952-asoc-wcd"
 
 #define BTSCO_RATE_8KHZ 8000
@@ -52,6 +65,8 @@
 #define MAX_WSA_CODEC_NAME_LENGTH 80
 #define MSM_DT_MAX_PROP_SIZE 80
 
+int g_gpio_audio_debug; /* ASUS_BSP mei_huang +++ */
+
 enum btsco_rates {
 	RATE_8KHZ_ID,
 	RATE_16KHZ_ID,
@@ -71,6 +86,15 @@ static int mi2s_rx_sample_rate = SAMPLING_RATE_48KHZ;
 static atomic_t quat_mi2s_clk_ref;
 static atomic_t quin_mi2s_clk_ref;
 static atomic_t auxpcm_mi2s_clk_ref;
+
+//Enable basic function for external-tfa-speaker;asus_bsp++
+#include <linux/proc_fs.h>
+#ifndef QUIN_STATUS_PROC_FILE
+#define QUIN_STATUS_PROC_FILE "quinmi2s_status"
+static struct proc_dir_entry *quin_status_proc_file;
+static int quin_mi2s_status = 0; //0 means not running
+#endif
+//Enable basic function for external-tfa-speaker;asus_bsp--
 
 static int msm8952_enable_dig_cdc_clk(struct snd_soc_codec *codec, int enable,
 					bool dapm);
@@ -1476,11 +1500,23 @@ static int msm_quin_mi2s_snd_startup(struct snd_pcm_substream *substream)
 		if (ret < 0)
 			pr_err("%s: set fmt cpu dai failed\n", __func__);
 	}
+
+	//Set the quin status for checking the i2s bit clock is sending or not;asus_bsp++
+	quin_mi2s_status = 1;
+	pr_err("%s: quin_mi2s_status = 1\n", __func__);
+	//Set the quin status for checking the i2s bit clock is sending or not;asus_bsp--
+
 	return ret;
 err:
 	ret = msm_mi2s_sclk_ctl(substream, false);
 	if (ret < 0)
 		pr_err("failed to disable sclk\n");
+
+	//Set the quin status for checking the i2s bit clock is sending or not;asus_bsp++
+	pr_debug("%s: quin_mi2s_status = 0\n", __func__);
+	quin_mi2s_status = 0;
+	//Set the quin status for checking the i2s bit clock is sending or not;asus_bsp--
+
 	return ret;
 }
 
@@ -1501,6 +1537,12 @@ static void msm_quin_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 					__func__, "quin_i2s");
 		return;
 	}
+	else { //Set the quin status for checking the i2s bit clock is sending or not;asus_bsp++
+		pr_err("%s: disable sclk successfully and quin_mi2s_status = 0\n", __func__);
+		quin_mi2s_status = 0;
+	}
+	//Set the quin status for checking the i2s bit clock is sending or not;asus_bsp--
+
 }
 
 static void *def_msm8952_wcd_mbhc_cal(void)
@@ -1540,14 +1582,14 @@ static void *def_msm8952_wcd_mbhc_cal(void)
 	 */
 	btn_low[0] = 75;
 	btn_high[0] = 75;
-	btn_low[1] = 150;
-	btn_high[1] = 150;
+	btn_low[1] = 125;
+	btn_high[1] = 125;
 	btn_low[2] = 225;
 	btn_high[2] = 225;
-	btn_low[3] = 450;
-	btn_high[3] = 450;
-	btn_low[4] = 500;
-	btn_high[4] = 500;
+	btn_low[3] = 437;
+	btn_high[3] = 437;
+	btn_low[4] = 437;
+	btn_high[4] = 437;
 
 	return msm8952_wcd_cal;
 }
@@ -2046,9 +2088,9 @@ static struct snd_soc_dai_link msm8952_dai[] = {
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA7,
 	},
 	{ /* hw:x,25 */
-		.name = "QUAT_MI2S Hostless",
-		.stream_name = "QUAT_MI2S Hostless",
-		.cpu_dai_name = "QUAT_MI2S_RX_HOSTLESS",
+		.name = "QUIN_MI2S Hostless",//asus_bsp++
+		.stream_name = "QUIN_MI2S Hostless",//asus_bsp++
+		.cpu_dai_name = "QUIN_MI2S_RX_HOSTLESS",//asus_bsp++
 		.platform_name = "msm-pcm-hostless",
 		.dynamic = 1,
 		.dpcm_playback = 1,
@@ -2890,6 +2932,95 @@ static struct snd_soc_card *msm8952_populate_sndcard_dailinks(
 	return card;
 }
 
+//Enable basic function for external-tfa-speaker;asus_bsp++
+static ssize_t quin_status_proc_read(struct file *filp,char __user *buff,size_t len,loff_t *off)
+{
+	char messages[256];
+	
+	if(*off)
+		return 0;
+
+	memset(messages,0,sizeof(messages));
+	if(len > 256)
+		len = 256;
+
+	sprintf(messages,"%d\n",quin_mi2s_status);	
+
+	if(copy_to_user(buff,messages,len))
+		return -EFAULT;
+
+	(*off)++;
+	return len;
+}
+
+static struct file_operations quin_status_proc_ops = {
+       .read = quin_status_proc_read,
+};
+
+static void create_quin_status_proc_file(void)
+{
+	quin_status_proc_file = proc_create(QUIN_STATUS_PROC_FILE,0666,NULL,&quin_status_proc_ops);
+}
+static void remove_quin_status_proc_file(void)
+{
+	extern struct proc_dir_entry proc_root;
+	remove_proc_entry(QUIN_STATUS_PROC_FILE,&proc_root);
+}
+//Enable basic function for external-tfa-speaker;asus_bsp--
+
+//ASUS_BSP +++ tyree_liu@asus.com  add for codec_status
+static ssize_t audio_codec_proc_read(struct file *filp, char __user *buff, size_t len, loff_t *off)
+{
+	char messages[256];
+	pr_err("[Audio] audio_codec_proc_read, codec_status is %d\n", codec_status);
+	if(*off)
+		return 0;
+	memset(messages, 0, sizeof(messages));
+	if (len > 256)
+		len = 256;
+
+	sprintf(messages, "%d\n", codec_status);
+    if (copy_to_user(buff, messages, sizeof(messages)))
+		return -EFAULT;
+	(*off)++;
+	return len;
+}
+
+static struct file_operations proc_fops=
+{
+    .read=audio_codec_proc_read,
+    .owner=THIS_MODULE,
+};
+
+static void create_audio_codec_proc_file(void)
+{
+    pr_err("[Audio] create_audio_codec_proc_file\n");
+    audio_codec_proc_file = proc_create(AUDIO_CODEC_PROC_FILE, 0444, NULL, &proc_fops);
+    if (!audio_codec_proc_file){
+        pr_err("[Audio] create_audio_codec_proc_file failed!\n");
+    }
+}
+//ASUS_BSP --- tyree_liu@asus.com  add for codec_status
+static int register_audiowizard_force_preset_sdev( void)
+{
+	int ret =0;
+	if (!g_audiowizard_force_preset_sdev) {
+			g_audiowizard_force_preset_sdev = kzalloc(sizeof(struct switch_dev), GFP_KERNEL);
+			if (!g_audiowizard_force_preset_sdev) {
+				pr_err("%s: failed to allocate switch_dev\n", __func__);
+				ret = -ENOMEM;
+			}
+			g_audiowizard_force_preset_sdev->name = "audiowizard_force_preset";
+			g_audiowizard_force_preset_sdev->state = 0;
+			ret = switch_dev_register(g_audiowizard_force_preset_sdev);
+			if (ret < 0)
+				pr_err("%s: failed to register switch audiowizard_force_preset\n", __func__);
+		}
+		else{
+			pr_err("%s: failed to register switch audiowizard_force_preset, already exsits \n", __func__);
+		}
+	return ret;
+}
 static int msm8952_asoc_machine_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card;
@@ -3091,6 +3222,24 @@ parse_mclk_freq:
 	}
 	pr_debug("%s: ext_pa = %d\n", __func__, pdata->ext_pa);
 
+/* ASUS_BSP mei_huang +++ */
+	g_gpio_audio_debug = of_get_named_gpio(pdev->dev.of_node, "AUDIO_DEBUG", 0);
+	if (g_gpio_audio_debug < 0)
+		printk("%s: property AUDIO_DEBUG not found\n", __func__);
+	if(g_user_dbg_mode == 1)
+		gpio_direction_output(g_gpio_audio_debug, 0);
+	else
+		gpio_direction_output(g_gpio_audio_debug, 1);
+/* ASUS_BSP mei_huang --- */
+	//ASUS_BSP +++ tyree_liu@asus.com  add for codec_status
+	//sherry ++ for audiowizard
+	register_audiowizard_force_preset_sdev();
+	//sherry --
+	if(!codec_num){
+		codec_num++;
+		create_audio_codec_proc_file();
+	}
+	//ASUS_BSP --- tyree_liu@asus.com  add for codec_status
 	ret = is_us_eu_switch_gpio_support(pdev, pdata);
 	if (ret < 0) {
 		pr_err("%s: failed to is_us_eu_switch_gpio_support %d\n",
@@ -3184,6 +3333,19 @@ parse_mclk_freq:
 			ret);
 		goto err;
 	}
+
+	//Create the quin checking status proc file;asus_bsp++
+	create_quin_status_proc_file();
+	pr_debug("%s:  after create_quin_status_proc_file\n",
+				__func__);
+	//Create the quin checking status proc file;asus_bsp--
+
+	//ASUS_BSP +++ tyree_liu@asus.com  add for codec_status
+       if(!codec_status){
+               codec_status=1;
+       }
+	//ASUS_BSP +++ tyree_liu@asus.com  add for codec_status
+
 	return 0;
 err:
 	if (pdata->vaddr_gpio_mux_spkr_ctl)
@@ -3203,6 +3365,16 @@ err:
 	}
 err1:
 	devm_kfree(&pdev->dev, pdata);
+
+	//remove the quin checking status proc file;asus_bsp++
+	if(quin_status_proc_file)
+		remove_quin_status_proc_file();
+	//remove the quin checking status proc file;asus_bsp--
+
+	//ASUS_BSP +++ tyree_liu@asus.com  add for codec_status
+    codec_status=0;
+	//ASUS_BSP --- tyree_liu@asus.com  add for codec_status
+
 	return ret;
 }
 
@@ -3230,6 +3402,12 @@ static int msm8952_asoc_machine_remove(struct platform_device *pdev)
 	}
 	snd_soc_unregister_card(card);
 	mutex_destroy(&pdata->cdc_mclk_mutex);
+
+	//remove the quin checking status proc file;asus_bsp++
+	if(quin_status_proc_file)
+		remove_quin_status_proc_file();
+	//remove the quin checking status proc file;asus_bsp--
+
 	return 0;
 }
 

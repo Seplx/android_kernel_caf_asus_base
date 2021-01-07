@@ -77,6 +77,7 @@ struct msm_flash_ctrl_t {
 	uint32_t flash_max_duration[MAX_LED_TRIGGERS];
 
 	/* Torch */
+	bool active;
 	uint32_t torch_num_sources;
 	const char *torch_trigger_name[MAX_LED_TRIGGERS];
 	struct led_trigger *torch_trigger[MAX_LED_TRIGGERS];

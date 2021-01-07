@@ -111,8 +111,9 @@ static int pwm_device_request(struct pwm_device *pwm, const char *label)
 {
 	int err;
 
-	if (test_bit(PWMF_REQUESTED, &pwm->flags))
-		return -EBUSY;
+//  remove this flag to support led green and red request pwm devices twice
+	//if (test_bit(PWMF_REQUESTED, &pwm->flags))
+		//return -EBUSY;
 
 	if (!try_module_get(pwm->chip->ops->owner))
 		return -ENODEV;
@@ -525,19 +526,19 @@ struct pwm_device *of_pwm_get(struct device_node *np, const char *con_id)
 	err = of_parse_phandle_with_args(np, "pwms", "#pwm-cells", index,
 					 &args);
 	if (err) {
-		pr_debug("%s(): can't parse \"pwms\" property\n", __func__);
+		printk("%s(): can't parse \"pwms\" property\n", __func__);
 		return ERR_PTR(err);
 	}
 
 	pc = of_node_to_pwmchip(args.np);
 	if (IS_ERR(pc)) {
-		pr_debug("%s(): PWM chip not found\n", __func__);
+		printk("%s(): PWM chip not found\n", __func__);
 		pwm = ERR_CAST(pc);
 		goto put;
 	}
 
 	if (args.args_count != pc->of_pwm_n_cells) {
-		pr_debug("%s: wrong #pwm-cells for %s\n", np->full_name,
+		printk("%s: wrong #pwm-cells for %s\n", np->full_name,
 			 args.np->full_name);
 		pwm = ERR_PTR(-EINVAL);
 		goto put;

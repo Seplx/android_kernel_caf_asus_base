@@ -82,7 +82,7 @@ struct msm_actuator_ctrl_t {
 	enum af_camera_name cam_name;
 	struct mutex *actuator_mutex;
 	struct msm_actuator_func_tbl *func_tbl;
-	enum msm_camera_i2c_data_type i2c_data_type;
+	enum msm_actuator_data_type i2c_data_type;
 	struct v4l2_subdev sdev;
 	struct v4l2_subdev_ops *act_v4l2_subdev_ops;
 
@@ -108,6 +108,7 @@ struct msm_actuator_ctrl_t {
 	struct msm_camera_gpio_conf *gconf;
 	struct msm_pinctrl_info pinctrl_info;
 	uint8_t cam_pinctrl_status;
+	uint32_t last_lens_pos;//asus bsp ralf
 };
 
 #endif

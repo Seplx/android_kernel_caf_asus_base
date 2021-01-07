@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -40,11 +40,26 @@
 /* Master structure to hold all the information about the DSI/panel */
 static struct mdss_dsi_data *mdss_dsi_res;
 
+
 #define DSI_DISABLE_PC_LATENCY 100
 #define DSI_ENABLE_PC_LATENCY PM_QOS_DEFAULT_VALUE
 
 static struct pm_qos_request mdss_dsi_pm_qos_request;
+extern struct mdss_panel_data *gdata;
 
+//extern int dclick_mode;
+extern bool cabc_first_boot;
+extern int gesture_mode;
+extern int dclick_mode;
+extern int swipe_mode;
+#ifdef ZD552KL_PHOENIX 
+extern void set_phoenix_alpm_cmd(short alpm_mode);
+extern void tm_read_alwayson_mode(char *rbuf);
+extern struct dsi_panel_cmds tm_51pulse_cmds;
+extern void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,struct dsi_panel_cmds *pcmds, u32 flags);
+#define ALPM_PANEL_VALUE   0xdc
+#define SYNC_TIME          17
+#endif
 static void mdss_dsi_pm_qos_add_request(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
 	struct irq_info *irq_info;
@@ -286,21 +301,36 @@ static int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
-	ret = mdss_dsi_panel_reset(pdata, 0);
+	/*ret = mdss_dsi_panel_reset(pdata, 0);
 	if (ret) {
 		pr_warn("%s: Panel reset failed. rc=%d\n", __func__, ret);
 		ret = 0;
+	}*/
+
+	if(ASUS_ZD552KL_PHOENIX == asus_project_id || ASUS_ZE553KL == asus_project_id){//follow qcom code flow:reset panel for ZE553KL
+		ret = mdss_dsi_panel_reset(pdata, 0);
+		if (ret) {
+			pr_warn("%s: Panel reset failed. rc=%d\n", __func__, ret);
+			ret = 0;
+		}
 	}
 
 	if (mdss_dsi_pinctrl_set_state(ctrl_pdata, false))
 		pr_debug("reset disable: pinctrl not enabled\n");
 
-	ret = msm_dss_enable_vreg(
-		ctrl_pdata->panel_power_data.vreg_config,
-		ctrl_pdata->panel_power_data.num_vreg, 0);
-	if (ret)
-		pr_err("%s: failed to disable vregs for %s\n",
-			__func__, __mdss_dsi_pm_name(DSI_PANEL_PM));
+
+//<ASUS-BSP Hank2_Liu 20160420> Add Boe panel iovcc&+/-5v still on ++++++	
+	if(((!(gesture_mode&0x40)) && (dclick_mode == 0) && (swipe_mode == 0))
+ 	|| (ASUS_ZD552KL_PHOENIX == asus_project_id)|| (ASUS_ZE553KL == asus_project_id)){//follow qcom code flow:disable vreg for ZE553KL
+		pr_info("enter mdss_dsi_panel_power_off!\n");
+		ret = msm_dss_enable_vreg(
+			ctrl_pdata->panel_power_data.vreg_config,
+			ctrl_pdata->panel_power_data.num_vreg, 0);
+		if (ret)
+			pr_err("%s: failed to disable vregs for %s\n",
+				__func__, __mdss_dsi_pm_name(DSI_PANEL_PM));
+	}
+//<ASUS-BSP Hank2_Liu 20160420> Add Boe panel iovcc&+/-5v still on ------ 
 
 end:
 	return ret;
@@ -311,6 +341,8 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 	int ret = 0;
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 
+	printk("[Display] mdss_dsi_panel_power_on+++++++\n");
+
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
 		return -EINVAL;
@@ -318,15 +350,19 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
-
-	ret = msm_dss_enable_vreg(
-		ctrl_pdata->panel_power_data.vreg_config,
-		ctrl_pdata->panel_power_data.num_vreg, 1);
-	if (ret) {
-		pr_err("%s: failed to enable vregs for %s\n",
-			__func__, __mdss_dsi_pm_name(DSI_PANEL_PM));
-		return ret;
+	
+	if(cabc_first_boot || ((!(gesture_mode&0x40)) && (dclick_mode == 0) && (swipe_mode == 0))
+	 || (ASUS_ZD552KL_PHOENIX == asus_project_id) || (ASUS_ZE553KL == asus_project_id)){//follow qcom code flow:enable vreg for ZE553KL
+		ret = msm_dss_enable_vreg(
+			ctrl_pdata->panel_power_data.vreg_config,
+			ctrl_pdata->panel_power_data.num_vreg, 1);
+		if (ret) {
+			pr_err("%s: failed to enable vregs for %s\n",
+				__func__, __mdss_dsi_pm_name(DSI_PANEL_PM));
+			return ret;
+		}
 	}
+
 
 	/*
 	 * If continuous splash screen feature is enabled, then we need to
@@ -334,7 +370,8 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 	 * bootloader. This needs to be done irresepective of whether
 	 * the lp11_init flag is set or not.
 	 */
-	if (pdata->panel_info.cont_splash_enabled ||
+//<ASUS-BSP Hank2_Liu 20160420> Add Boe panel reset seq setup before +/-5.5v power on ++++++	
+	/*if (pdata->panel_info.cont_splash_enabled ||
 		!pdata->panel_info.mipi.lp11_init) {
 		if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
 			pr_debug("reset enable: pinctrl not enabled\n");
@@ -343,7 +380,24 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 		if (ret)
 			pr_err("%s: Panel reset failed. rc=%d\n",
 					__func__, ret);
+	}*/
+
+	 //follow qcom code flow:reset panel for ZE553KL
+	 if((ASUS_ZD552KL_PHOENIX == asus_project_id)||(ASUS_ZE553KL == asus_project_id)){
+		if (pdata->panel_info.cont_splash_enabled ||
+			!pdata->panel_info.mipi.lp11_init) {
+			if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
+				pr_debug("reset enable: pinctrl not enabled\n");
+
+			ret = mdss_dsi_panel_reset(pdata, 1);
+			if (ret)
+				pr_err("%s: Panel reset failed. rc=%d\n",
+						__func__, ret);
+		}
 	}
+
+//<ASUS-BSP Hank2_Liu 20160420> Add Boe panel reset seq setup before +/-5.5v power on ------	
+    printk("[Display] mdss_dsi_panel_power_on------\n");
 
 	return ret;
 }
@@ -351,6 +405,43 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 static int mdss_dsi_panel_power_lp(struct mdss_panel_data *pdata, int enable)
 {
 	/* Panel power control when entering/exiting lp mode */
+//<ASUS-BSP Robert_He 20170620> add alpm logic to avoid enter alpm fail as panel IC advise +++
+#ifdef ZD552KL_PHOENIX
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+	int i = 0;
+	char rbuf;
+	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
+				panel_data);
+
+	if (enable)
+	{
+		printk("[Panel]set 51 pulse cmds before enter AOD\n");
+		mdss_dsi_panel_cmds_send(ctrl_pdata, &tm_51pulse_cmds, CMD_REQ_COMMIT);
+		for(i=0;i<10;i++)
+		{
+			set_phoenix_alpm_cmd(1);
+			tm_read_alwayson_mode(&rbuf);
+			if (rbuf != ALPM_PANEL_VALUE)
+			{
+				printk("[Panel]do not enter into alpm right\n");
+				msleep(SYNC_TIME);
+			}
+			else
+			{
+				break;
+			}
+		}
+		if(i >= 10)
+		{
+			printk("[Panel]enter into alpm fail\n");
+		}
+	}
+	else
+	{
+		set_phoenix_alpm_cmd(0);
+	}
+#endif
+//<ASUS-BSP Robert_He 20170620> add alpm logic to avoid enter alpm fail as panel IC advise ---
 	return 0;
 }
 
@@ -625,6 +716,7 @@ struct buf_data {
 	char *string_buf; /* cmd buf as string, 3 bytes per number */
 	int sblen; /* string buffer length */
 	int sync_flag;
+	struct mutex dbg_mutex; /* mutex to synchronize read/write/flush */
 };
 
 struct mdss_dsi_debugfs_info {
@@ -660,7 +752,7 @@ static ssize_t mdss_dsi_cmd_state_read(struct file *file, char __user *buf,
 	if (blen < 0)
 		return 0;
 
-	if (copy_to_user(buf, buffer, blen))
+	if (copy_to_user(buf, buffer, min(count, (size_t)blen+1)))
 		return -EFAULT;
 
 	*ppos += blen;
@@ -714,6 +806,7 @@ static ssize_t mdss_dsi_cmd_read(struct file *file, char __user *buf,
 	char *bp;
 	ssize_t ret = 0;
 
+	mutex_lock(&pcmds->dbg_mutex);
 	if (*ppos == 0) {
 		kfree(pcmds->string_buf);
 		pcmds->string_buf = NULL;
@@ -732,6 +825,7 @@ static ssize_t mdss_dsi_cmd_read(struct file *file, char __user *buf,
 		buffer = kmalloc(bsize, GFP_KERNEL);
 		if (!buffer) {
 			pr_err("%s: Failed to allocate memory\n", __func__);
+			mutex_unlock(&pcmds->dbg_mutex);
 			return -ENOMEM;
 		}
 
@@ -767,10 +861,12 @@ static ssize_t mdss_dsi_cmd_read(struct file *file, char __user *buf,
 		kfree(pcmds->string_buf);
 		pcmds->string_buf = NULL;
 		pcmds->sblen = 0;
+		mutex_unlock(&pcmds->dbg_mutex);
 		return 0; /* the end */
 	}
 	ret = simple_read_from_buffer(buf, count, ppos, pcmds->string_buf,
 				      pcmds->sblen);
+	mutex_unlock(&pcmds->dbg_mutex);
 	return ret;
 }
 
@@ -782,6 +878,7 @@ static ssize_t mdss_dsi_cmd_write(struct file *file, const char __user *p,
 	int blen = 0;
 	char *string_buf;
 
+	mutex_lock(&pcmds->dbg_mutex);
 	if (*ppos == 0) {
 		kfree(pcmds->string_buf);
 		pcmds->string_buf = NULL;
@@ -793,6 +890,7 @@ static ssize_t mdss_dsi_cmd_write(struct file *file, const char __user *p,
 	string_buf = krealloc(pcmds->string_buf, blen + 1, GFP_KERNEL);
 	if (!string_buf) {
 		pr_err("%s: Failed to allocate memory\n", __func__);
+		mutex_unlock(&pcmds->dbg_mutex);
 		return -ENOMEM;
 	}
 
@@ -802,6 +900,7 @@ static ssize_t mdss_dsi_cmd_write(struct file *file, const char __user *p,
 	string_buf[blen] = '\0';
 	pcmds->string_buf = string_buf;
 	pcmds->sblen = blen;
+	mutex_unlock(&pcmds->dbg_mutex);
 	return ret;
 }
 
@@ -812,8 +911,12 @@ static int mdss_dsi_cmd_flush(struct file *file, fl_owner_t id)
 	char *buf, *bufp, *bp;
 	struct dsi_ctrl_hdr *dchdr;
 
-	if (!pcmds->string_buf)
+	mutex_lock(&pcmds->dbg_mutex);
+
+	if (!pcmds->string_buf) {
+		mutex_unlock(&pcmds->dbg_mutex);
 		return 0;
+	}
 
 	/*
 	 * Allocate memory for command buffer
@@ -826,6 +929,7 @@ static int mdss_dsi_cmd_flush(struct file *file, fl_owner_t id)
 		kfree(pcmds->string_buf);
 		pcmds->string_buf = NULL;
 		pcmds->sblen = 0;
+		mutex_unlock(&pcmds->dbg_mutex);
 		return -ENOMEM;
 	}
 
@@ -850,6 +954,7 @@ static int mdss_dsi_cmd_flush(struct file *file, fl_owner_t id)
 			pr_err("%s: dtsi cmd=%x error, len=%d\n",
 				__func__, dchdr->dtype, dchdr->dlen);
 			kfree(buf);
+			mutex_unlock(&pcmds->dbg_mutex);
 			return -EINVAL;
 		}
 		bp += sizeof(*dchdr);
@@ -861,6 +966,7 @@ static int mdss_dsi_cmd_flush(struct file *file, fl_owner_t id)
 		pr_err("%s: dcs_cmd=%x len=%d error!\n", __func__,
 				bp[0], len);
 		kfree(buf);
+		mutex_unlock(&pcmds->dbg_mutex);
 		return -EINVAL;
 	}
 
@@ -873,6 +979,7 @@ static int mdss_dsi_cmd_flush(struct file *file, fl_owner_t id)
 		pcmds->buf = buf;
 		pcmds->blen = blen;
 	}
+	mutex_unlock(&pcmds->dbg_mutex);
 	return 0;
 }
 
@@ -887,6 +994,7 @@ struct dentry *dsi_debugfs_create_dcs_cmd(const char *name, umode_t mode,
 				struct dentry *parent, struct buf_data *cmd,
 				struct dsi_panel_cmds ctrl_cmds)
 {
+	mutex_init(&cmd->dbg_mutex);
 	cmd->buf = ctrl_cmds.buf;
 	cmd->blen = ctrl_cmds.blen;
 	cmd->string_buf = NULL;
@@ -1327,13 +1435,23 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 		pr_debug("%s: panel already on\n", __func__);
 		goto end;
 	}
-
-	ret = mdss_dsi_panel_power_ctrl(pdata, MDSS_PANEL_POWER_ON);
+//<ASUS-BSP Hank2_Liu 20160420> Boe panel reset after LP11 start ++++++	
+	/*ret = mdss_dsi_panel_power_ctrl(pdata, MDSS_PANEL_POWER_ON);
 	if (ret) {
 		pr_err("%s:Panel power on failed. rc=%d\n", __func__, ret);
 		goto end;
+	}*/
+ 
+	//follow qcom code flow:power on panel for ASUS_ZD552KL_PHOENIX
+	if((ASUS_ZD552KL_PHOENIX == asus_project_id)||(ASUS_ZE553KL == asus_project_id)) {
+		ret = mdss_dsi_panel_power_ctrl(pdata, MDSS_PANEL_POWER_ON);
+		if (ret) {
+			pr_err("%s:Panel power on failed. rc=%d\n", __func__, ret);
+			goto end;
+		}
 	}
 
+//<ASUS-BSP Hank2_Liu 20160420> Boe panel reset after LP11 start ------		
 	if (mdss_panel_is_power_on(cur_power_state)) {
 		pr_debug("%s: dsi_on from panel low power state\n", __func__);
 		goto end;
@@ -1371,11 +1489,24 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 	mdss_dsi_clk_ctrl(ctrl_pdata, ctrl_pdata->dsi_clk_handle,
 			  MDSS_DSI_LINK_CLK, MDSS_DSI_CLK_ON);
 	mdss_dsi_sw_reset(ctrl_pdata, true);
+//<ASUS-BSP Hank2_Liu 20160420> Boe panel reset after LP11 start ++++++
 
+	//follow qcom code flow:donnot power on panel for ASUS_ZD552KL_PHOENIX
+	if((ASUS_ZD552KL_PHOENIX != asus_project_id)&&(ASUS_ZE553KL != asus_project_id)){
+		ret = mdss_dsi_panel_power_ctrl(pdata, MDSS_PANEL_POWER_ON);
+		if (ret) {
+			pr_err("%s:Panel power on failed. rc=%d\n", __func__, ret);
+			goto end;
+		}
+	}
+
+//<ASUS-BSP Hank2_Liu 20160420> Boe panel reset after LP11 start ------
 	/*
 	 * Issue hardware reset line after enabling the DSI clocks and data
 	 * data lanes for LP11 init
 	 */
+
+	
 	if (mipi->lp11_init) {
 		if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
 			pr_debug("reset enable: pinctrl not enabled\n");
@@ -4129,11 +4260,39 @@ static const struct of_device_id mdss_dsi_dt_match[] = {
 	{}
 };
 MODULE_DEVICE_TABLE(of, mdss_dsi_dt_match);
+//<ASUS-BSP Hank2_Liu 20160422> Fix Incell panel power off seq ++++++
+static void mdss_dsi_shutdown(struct platform_device *pdev)
+{
+	int ret = 0;
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+
+	pr_info("enter %s!!!!!!!\n",__func__);
+	ret = mdss_dsi_panel_reset(gdata, 0);
+	if (ret) {
+		pr_warn("%s: Panel reset failed. rc=%d\n", __func__, ret);
+		ret = 0;
+	}
+
+	ctrl_pdata = container_of(gdata, struct mdss_dsi_ctrl_pdata,
+				panel_data);
+	usleep_range(15000,15000);
+
+	ret = msm_dss_enable_vreg(
+			ctrl_pdata->panel_power_data.vreg_config,
+			ctrl_pdata->panel_power_data.num_vreg, 0);
+	if (ret) {
+			pr_err("%s: failed to enable vregs for %s\n",
+				__func__, __mdss_dsi_pm_name(DSI_PANEL_PM));
+			return;
+
+	}	
+}
+//<ASUS-BSP Hank2_Liu 20160422> Fix Incell panel power off seq ------
 
 static struct platform_driver mdss_dsi_driver = {
 	.probe = mdss_dsi_probe,
 	.remove = mdss_dsi_remove,
-	.shutdown = NULL,
+	.shutdown = mdss_dsi_shutdown,
 	.driver = {
 		.name = "mdss_dsi",
 		.of_match_table = mdss_dsi_dt_match,

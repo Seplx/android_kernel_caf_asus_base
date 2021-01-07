@@ -210,20 +210,20 @@ dtb-$(CONFIG_ARCH_MSM8940) += msm8940-pmi8937-cdp.dtb \
 	msm8940-pmi8940-rcm.dtb \
 	msm8940-pmi8940-qrd-sku7.dtb
 
-dtb-$(CONFIG_ARCH_MSM8953) += msm8953-sim.dtb \
-	msm8953-rumi.dtb \
-	msm8953-cdp.dtb \
-	msm8953-mtp.dtb \
-	msm8953-ext-codec-mtp.dtb \
-	msm8953-qrd-sku3.dtb \
-	msm8953-rcm.dtb \
-	msm8953-ext-codec-rcm.dtb \
-	apq8053-cdp.dtb \
-	apq8053-mtp.dtb \
-	apq8053-ext-audio-mtp.dtb \
-	msm8953-cdp-1200p.dtb \
-	msm8953-iot-mtp.dtb \
-	apq8053-iot-mtp.dtb
+dtb-$(CONFIG_ARCH_MSM8953) += msm8953-ZS550KL-EVB-mtp.dtb \
+	msm8953-ZS550KL-SR1-mtp.dtb \
+	msm8953-ZS550KL-SR2-mtp.dtb \
+        msm8953-ZS550KL-PR-mtp.dtb \
+	msm8953-ZE553KL-EVB-mtp.dtb \
+	msm8953-ZE553KL-ER-mtp.dtb \
+	msm8953-ZE553KL-SR1-mtp.dtb \
+	msm8953-ZE553KL-SR2-mtp.dtb \
+	msm8953-ZE553KL-PR1-mtp.dtb \
+	msm8953-ZE553KL-PR2-mtp.dtb \
+	msm8953-ZE553KL-MP-mtp.dtb \
+	msm8953-ZD552KL_PHOENIX-SR1-mtp.dtb \
+	msm8953-ZD552KL_PHOENIX-ER1-mtp.dtb \
+	msm8953-ZD552KL_PHOENIX-PR-mtp.dtb
 
 dtb-$(CONFIG_ARCH_MDM9607) += mdm9607-rumi.dtb \
 	mdm9607-cdp.dtb \

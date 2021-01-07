@@ -123,3 +123,4 @@ long msm_sensor_subdev_fops_ioctl(struct file *file,
 	unsigned long arg);
 #endif
 #endif
+

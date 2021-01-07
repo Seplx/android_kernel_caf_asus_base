@@ -31,7 +31,7 @@ ifeq ($(CONFIG_FB_MSM_MDSS),y)
 obj-$(CONFIG_DEBUG_FS) += mdss_debug.o mdss_debug_xlog.o
 endif
 
-mdss-dsi-objs := mdss_dsi.o mdss_dsi_host.o mdss_dsi_cmd.o mdss_dsi_status.o
+mdss-dsi-objs := mdss_dsi.o mdss_dsi_host.o mdss_dsi_cmd.o 
 mdss-dsi-objs += mdss_dsi_panel.o
 mdss-dsi-objs += msm_mdss_io_8974.o
 mdss-dsi-objs += mdss_dsi_phy.o
@@ -44,6 +44,7 @@ obj-$(CONFIG_FB_MSM_MDSS) += mdss_cec_core.o
 obj-$(CONFIG_FB_MSM_MDSS) += mdss_dba_utils.o
 obj-$(CONFIG_FB_MSM_MDSS_EDP_PANEL) += mdss_edp.o
 obj-$(CONFIG_FB_MSM_MDSS_EDP_PANEL) += mdss_edp_aux.o
+obj-$(CONFIG_FB_MSM_MDSS_DSI_CTRL_STATUS) += mdss_dsi_status.o
 
 obj-$(CONFIG_FB_MSM_MDSS) += mdss_io_util.o
 obj-$(CONFIG_FB_MSM_MDSS_HDMI_PANEL) += mdss_hdmi_tx.o

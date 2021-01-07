@@ -134,6 +134,9 @@ struct mmc_ext_csd {
 	u8			barrier_en;
 
 	u8			fw_version;		/* 254 */
+	u8          raw_fw_version[8];  /* 254 - 8 bytes */	//ASUS_BSP jessie_tian : add for fw version +++
+	u8          device_life_time[2];/* 268  269*/       	//ASUS_BSP jessie_tian: add for DEVICE_LIFE_TIME_EST_TYP of eMMC
+	u8          pre_device_eol;	/*267*/			//ASUS_BSP jessie_tian:PRE_EOL_INFO
 	unsigned int            feature_support;
 #define MMC_DISCARD_FEATURE	BIT(0)                  /* CMD38 feature */
 };
@@ -428,6 +431,9 @@ struct mmc_card {
 	u8 *cached_ext_csd;
 	bool cmdq_init;
 	struct mmc_bkops_info bkops;
+//ASUS_BSP +++ jessie_tian "add eMMC total size for AMAX"
+	char                mmc_total_size[10];
+//ASUS_BSP --- jessie_tian "add eMMC total size for AMAX"
 };
 
 /*

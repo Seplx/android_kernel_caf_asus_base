@@ -420,6 +420,8 @@ struct wcd_mbhc {
 	/* Work to correct accessory type */
 	struct work_struct correct_plug_swch;
 	struct notifier_block nblock;
+	//ASUS_BSP tyree_liu +++ for factory test headset insert check
+	struct dentry *debugfs_mbhc;
 
 	struct wcd_mbhc_register *wcd_mbhc_regs;
 
@@ -480,6 +482,8 @@ struct wcd_mbhc {
 	sizeof(struct wcd_mbhc_imped_detect_cfg) + \
 	(cfg_ptr->_n_rload * \
 	(sizeof(cfg_ptr->_rload[0]) + sizeof(cfg_ptr->_alpha[0]))))
+
+void wcd_mbhc_plug_detect_for_debug_mode(struct wcd_mbhc *mbhc, int debug_mode); /* ASUS_BSP tyree_liu +++ */
 
 #ifdef CONFIG_SND_SOC_WCD_MBHC
 int wcd_mbhc_set_keycode(struct wcd_mbhc *mbhc);

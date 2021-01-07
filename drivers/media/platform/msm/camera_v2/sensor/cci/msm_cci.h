@@ -23,6 +23,10 @@
 #include "msm_sd.h"
 #include "cam_soc_api.h"
 
+//ASUS_BSP +++
+#define DEFINE_MSM_MUTEX(mutexname) \
+	static struct mutex mutexname = __MUTEX_INITIALIZER(mutexname)
+//ASUS_BSP ---
 #define NUM_MASTERS 2
 #define NUM_QUEUES 2
 

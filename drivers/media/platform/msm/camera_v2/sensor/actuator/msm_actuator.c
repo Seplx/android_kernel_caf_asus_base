@@ -17,15 +17,23 @@
 #include "msm_actuator.h"
 #include "msm_cci.h"
 
+#include <linux/debugfs.h>
+#include <linux/fs.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include "../fac_camera.h"
+
 DEFINE_MSM_MUTEX(msm_actuator_mutex);
+
 
 #undef CDBG
 #ifdef MSM_ACTUATOR_DEBUG
-#define CDBG(fmt, args...) pr_err(fmt, ##args)
+#define CDBG(fmt, args...) pr_info(fmt, ##args)
 #else
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
 #endif
 
+#define PARK_LENS_MAX_STEP 20
 #define PARK_LENS_LONG_STEP 7
 #define PARK_LENS_MID_STEP 5
 #define PARK_LENS_SMALL_STEP 3
@@ -47,6 +55,7 @@ static struct msm_actuator *actuators[] = {
 	&msm_hvcm_actuator_table,
 	&msm_bivcm_actuator_table,
 };
+
 
 static int32_t msm_actuator_piezo_set_default_focus(
 	struct msm_actuator_ctrl_t *a_ctrl,
@@ -587,7 +596,7 @@ static int32_t msm_actuator_move_focus(
 	if ((a_ctrl->region_size <= 0) ||
 		(a_ctrl->region_size > MAX_ACTUATOR_REGION) ||
 		(!move_params->ringing_params)) {
-		pr_err("Invalid-region size = %d, ringing_params = %pK\n",
+		pr_err("Invalid-region size = %d, ringing_params = %p\n",
 		a_ctrl->region_size, move_params->ringing_params);
 		return -EFAULT;
 	}
@@ -707,7 +716,7 @@ static int32_t msm_actuator_bivcm_move_focus(
 	if ((a_ctrl->region_size <= 0) ||
 		(a_ctrl->region_size > MAX_ACTUATOR_REGION) ||
 		(!move_params->ringing_params)) {
-		pr_err("Invalid-region size = %d, ringing_params = %pK\n",
+		pr_err("Invalid-region size = %d, ringing_params = %p\n",
 		a_ctrl->region_size, move_params->ringing_params);
 		return -EFAULT;
 	}
@@ -803,9 +812,16 @@ static int32_t msm_actuator_park_lens(struct msm_actuator_ctrl_t *a_ctrl)
 	if (a_ctrl->park_lens.max_step > a_ctrl->max_code_size)
 		a_ctrl->park_lens.max_step = a_ctrl->max_code_size;
 
-	next_lens_pos = a_ctrl->step_position_table[a_ctrl->curr_step_pos];
+	next_lens_pos = a_ctrl->last_lens_pos;
 	while (next_lens_pos) {
 		/* conditions which help to reduce park lens time */
+#ifdef ZE553KL
+		if (next_lens_pos > (a_ctrl->park_lens.max_step *
+			PARK_LENS_MAX_STEP)){
+			next_lens_pos = a_ctrl->park_lens.max_step *
+			(PARK_LENS_MAX_STEP - PARK_LENS_LONG_STEP);	//if next_lens_pos > PARK_LENS_MAX_STEP, move to (PARK_LENS_MAX_STEP - PARK_LENS_LONG_STEP)
+		} else
+#endif
 		if (next_lens_pos > (a_ctrl->park_lens.max_step *
 			PARK_LENS_LONG_STEP)) {
 			next_lens_pos = next_lens_pos -
@@ -827,6 +843,7 @@ static int32_t msm_actuator_park_lens(struct msm_actuator_ctrl_t *a_ctrl)
 				(next_lens_pos - a_ctrl->park_lens.
 				max_step) : 0;
 		}
+		a_ctrl->last_lens_pos = next_lens_pos;
 		a_ctrl->func_tbl->actuator_parse_i2c_params(a_ctrl,
 			next_lens_pos, a_ctrl->park_lens.hw_params,
 			a_ctrl->park_lens.damping_delay);
@@ -928,8 +945,8 @@ static int32_t msm_actuator_bivcm_init_step_table(
 						step_index] =
 						max_code_size;
 			}
-			CDBG("step_position_table[%d] = %d\n", step_index,
-				a_ctrl->step_position_table[step_index]);
+			//CDBG("step_position_table[%d] = %d\n", step_index,
+			//	a_ctrl->step_position_table[step_index]);
 		}
 	}
 	CDBG("Exit\n");
@@ -1017,8 +1034,8 @@ static int32_t msm_actuator_init_step_table(struct msm_actuator_ctrl_t *a_ctrl,
 						step_index] =
 						max_code_size;
 			}
-			CDBG("step_position_table[%d] = %d\n", step_index,
-				a_ctrl->step_position_table[step_index]);
+			//CDBG("step_position_table[%d] = %d\n", step_index,
+			//	a_ctrl->step_position_table[step_index]);
 		}
 	}
 	CDBG("Exit\n");
@@ -1169,10 +1186,10 @@ static int32_t msm_actuator_set_position(
 	}
 
 	a_ctrl->i2c_tbl_index = 0;
-	hw_params = set_pos->hw_params;
 	for (index = 0; index < set_pos->number_of_steps; index++) {
 		next_lens_position = set_pos->pos[index];
 		delay = set_pos->delay[index];
+		a_ctrl->last_lens_pos=next_lens_position;//asus bsp ralf
 		a_ctrl->func_tbl->actuator_parse_i2c_params(a_ctrl,
 			next_lens_position, hw_params, delay);
 
@@ -1190,6 +1207,7 @@ static int32_t msm_actuator_set_position(
 		}
 		a_ctrl->i2c_tbl_index = 0;
 	}
+	
 	CDBG("%s exit %d\n", __func__, __LINE__);
 	return rc;
 }
@@ -1225,11 +1243,13 @@ static int32_t msm_actuator_bivcm_set_position(
 	hw_params = set_pos->hw_params;
 	for (index = 0; index < set_pos->number_of_steps; index++) {
 		next_lens_position = set_pos->pos[index];
+		a_ctrl->last_lens_pos=next_lens_position;//asus bsp ralf
 		delay = set_pos->delay[index];
 		rc = msm_actuator_bivcm_handle_i2c_ops(a_ctrl,
 		next_lens_position, hw_params, delay);
 		a_ctrl->i2c_tbl_index = 0;
 	}
+	
 	CDBG("%s exit %d\n", __func__, __LINE__);
 	return rc;
 }
@@ -1396,7 +1416,7 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
 {
 	struct msm_actuator_cfg_data *cdata =
 		(struct msm_actuator_cfg_data *)argp;
-	int32_t rc = -EINVAL;
+	int32_t rc = 0;
 	mutex_lock(a_ctrl->actuator_mutex);
 	CDBG("Enter\n");
 	CDBG("%s type %d\n", __func__, cdata->cfgtype);
@@ -1406,7 +1426,7 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
 		a_ctrl->actuator_state == ACT_DISABLE_STATE) {
 		pr_err("actuator disabled %d\n", rc);
 		mutex_unlock(a_ctrl->actuator_mutex);
-		return rc;
+		return -EINVAL;
 	}
 
 	switch (cdata->cfgtype) {
@@ -1418,7 +1438,6 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
 	case CFG_GET_ACTUATOR_INFO:
 		cdata->is_af_supported = 1;
 		cdata->cfg.cam_name = a_ctrl->cam_name;
-		rc = 0;
 		break;
 
 	case CFG_SET_ACTUATOR_INFO:
@@ -1428,21 +1447,19 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
 		break;
 
 	case CFG_SET_DEFAULT_FOCUS:
-		if (a_ctrl->func_tbl &&
-			a_ctrl->func_tbl->actuator_set_default_focus)
-			rc = a_ctrl->func_tbl->actuator_set_default_focus(
-				a_ctrl, &cdata->cfg.move);
+		rc = a_ctrl->func_tbl->actuator_set_default_focus(a_ctrl,
+			&cdata->cfg.move);
 		if (rc < 0)
 			pr_err("move focus failed %d\n", rc);
+		CDBG("a_ctrl=%p,last_lens_pos=%d",a_ctrl,a_ctrl->last_lens_pos);//asus bsp ralf
 		break;
 
 	case CFG_MOVE_FOCUS:
-		if (a_ctrl->func_tbl &&
-			a_ctrl->func_tbl->actuator_move_focus)
-			rc = a_ctrl->func_tbl->actuator_move_focus(a_ctrl,
-				&cdata->cfg.move);
+		rc = a_ctrl->func_tbl->actuator_move_focus(a_ctrl,
+			&cdata->cfg.move);
 		if (rc < 0)
 			pr_err("move focus failed %d\n", rc);
+		CDBG("a_ctrl=%p,last_lens_pos=%d",a_ctrl,a_ctrl->last_lens_pos);//asus bsp ralf
 		break;
 	case CFG_ACTUATOR_POWERDOWN:
 		rc = msm_actuator_power_down(a_ctrl);
@@ -1451,12 +1468,11 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
 		break;
 
 	case CFG_SET_POSITION:
-		if (a_ctrl->func_tbl &&
-			a_ctrl->func_tbl->actuator_set_position)
-			rc = a_ctrl->func_tbl->actuator_set_position(a_ctrl,
-				&cdata->cfg.setpos);
+		rc = a_ctrl->func_tbl->actuator_set_position(a_ctrl,
+			&cdata->cfg.setpos);
 		if (rc < 0)
 			pr_err("actuator_set_position failed %d\n", rc);
+		CDBG("a_ctrl=%p,last_lens_pos=%d",a_ctrl,a_ctrl->last_lens_pos);//asus bsp ralf
 		break;
 
 	case CFG_ACTUATOR_POWERUP:
@@ -1551,7 +1567,7 @@ static long msm_actuator_subdev_ioctl(struct v4l2_subdev *sd,
 	struct msm_actuator_ctrl_t *a_ctrl = v4l2_get_subdevdata(sd);
 	void __user *argp = (void __user *)arg;
 	CDBG("Enter\n");
-	CDBG("%s:%d a_ctrl %pK argp %pK\n", __func__, __LINE__, a_ctrl, argp);
+	CDBG("%s:%d a_ctrl %p argp %p\n", __func__, __LINE__, a_ctrl, argp);
 	switch (cmd) {
 	case VIDIOC_MSM_SENSOR_GET_SUBDEV_ID:
 		return msm_actuator_get_subdev_id(a_ctrl, argp);
@@ -1814,7 +1830,7 @@ static int32_t msm_actuator_i2c_probe(struct i2c_client *client,
 		goto probe_failure;
 	}
 
-	CDBG("client = 0x%pK\n",  client);
+	CDBG("client = 0x%p\n",  client);
 
 	rc = of_property_read_u32(client->dev.of_node, "cell-index",
 		&act_ctrl_t->subdev_id);
@@ -1870,7 +1886,7 @@ static int32_t msm_actuator_i2c_probe(struct i2c_client *client,
 	act_ctrl_t->msm_sd.sd.devnode->fops =
 		&msm_actuator_v4l2_subdev_fops;
 	act_ctrl_t->actuator_state = ACT_DISABLE_STATE;
-	pr_info("msm_actuator_i2c_probe: succeeded\n");
+	printk("msm_actuator_i2c_probe: succeeded\n");
 	CDBG("Exit\n");
 
 	return 0;
@@ -1985,6 +2001,8 @@ static int32_t msm_actuator_platform_probe(struct platform_device *pdev)
 	msm_actuator_t->msm_sd.sd.devnode->fops =
 		&msm_actuator_v4l2_subdev_fops;
 
+	vcm_create_proc_file(msm_actuator_t);//asus bsp ralf
+
 	CDBG("Exit\n");
 	return rc;
 }
@@ -2030,7 +2048,7 @@ static int __init msm_actuator_init_module(void)
 	rc = platform_driver_register(&msm_actuator_platform_driver);
 	if (!rc)
 		return rc;
-
+	
 	CDBG("%s:%d rc %d\n", __func__, __LINE__, rc);
 	return i2c_add_driver(&msm_actuator_i2c_driver);
 }

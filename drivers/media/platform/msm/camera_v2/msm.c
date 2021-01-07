@@ -359,6 +359,11 @@ static void msm_add_sd_in_position(struct msm_sd_subdev *msm_subdev,
 	struct msm_sd_subdev *temp_sd;
 
 	list_for_each_entry(temp_sd, sd_list, list) {
+		if (temp_sd == msm_subdev) {
+			pr_err("%s :Fail to add the same sd %d\n",
+				__func__, __LINE__);
+			return;
+		}
 		if (msm_subdev->close_seq < temp_sd->close_seq) {
 			list_add_tail(&msm_subdev->list, &temp_sd->list);
 			return;
@@ -884,7 +889,7 @@ int msm_post_event(struct v4l2_event *event, int timeout)
 
 	if (timeout < 0) {
 		mutex_unlock(&session->lock);
-		pr_debug("%s : timeout cannot be negative Line %d\n",
+		pr_err("%s : timeout cannot be negative Line %d\n",
 				__func__, __LINE__);
 		return rc;
 	}

@@ -110,4 +110,5 @@ obj-$(CONFIG_REGULATOR_QPNP_LABIBB) += qpnp-labibb-regulator.o
 obj-$(CONFIG_REGULATOR_STUB) += stub-regulator.o
 obj-$(CONFIG_REGULATOR_KRYO) += kryo-regulator.o
 obj-$(CONFIG_REGULATOR_CPR2_GFX) += cpr2-gfx-regulator.o
+obj-$(CONFIG_REGULATOR_ONSEMI_NCP6335D) += onsemi-ncp6335d.o #ASUS_BSP Zhengwei_Cai "porting buck convertor for RK"
 ccflags-$(CONFIG_REGULATOR_DEBUG) += -DDEBUG

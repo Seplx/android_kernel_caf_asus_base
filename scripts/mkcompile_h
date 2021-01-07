@@ -42,6 +42,11 @@ if [ -z "$KBUILD_BUILD_TIMESTAMP" ]; then
 else
 	TIMESTAMP=$KBUILD_BUILD_TIMESTAMP
 fi
+
+if [ "$SOURCE_TREE" ==  "CTS" ]; then
+    TIMESTAMP=$TARGET_DATE
+fi
+
 if test -z "$KBUILD_BUILD_USER"; then
 	LINUX_COMPILE_BY=$(whoami | sed 's/\\/\\\\/')
 else
@@ -51,6 +56,10 @@ if test -z "$KBUILD_BUILD_HOST"; then
 	LINUX_COMPILE_HOST=`hostname`
 else
 	LINUX_COMPILE_HOST=$KBUILD_BUILD_HOST
+fi
+
+if [ -e include/generated/buildversion.txt ];then
+	ASUS_BUILD_KERNEL_VERSION=`cat include/generated/buildversion.txt`
 fi
 
 UTS_VERSION="#$VERSION"
@@ -75,6 +84,10 @@ UTS_TRUNCATE="cut -b -$UTS_LEN"
 
   echo \#define LINUX_COMPILE_BY \"`echo $LINUX_COMPILE_BY | $UTS_TRUNCATE`\"
   echo \#define LINUX_COMPILE_HOST \"`echo $LINUX_COMPILE_HOST | $UTS_TRUNCATE`\"
+
+if [ ! -z "$ASUS_BUILD_KERNEL_VERSION" ];then
+  echo \#define ASUS_BUILD_KERNEL_VERSION \"`echo $ASUS_BUILD_KERNEL_VERSION | $UTS_TRUNCATE`\"
+fi
 
   echo \#define LINUX_COMPILER \"`$CC -v 2>&1 | grep ' version '`\"
 ) > .tmpcompile

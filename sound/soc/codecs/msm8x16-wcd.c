@@ -45,6 +45,12 @@
 #include "msm8916-wcd-irq.h"
 #include "msm8x16_wcd_registers.h"
 
+/* ASUS_BSP tyree_liu +++ */
+#include <linux/proc_fs.h>
+struct msm8x16_wcd_priv *g_msm8x16_wcd_priv;
+extern int g_gpio_audio_debug;
+/* ASUS_BSP tyree_liu --- */
+
 #define MSM8X16_WCD_RATES (SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_16000 |\
 			SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_48000)
 #define MSM8X16_WCD_FORMATS (SNDRV_PCM_FMTBIT_S16_LE |\
@@ -98,7 +104,8 @@ enum {
 #define SPK_PMD 2
 #define SPK_PMU 3
 
-#define MICBIAS_DEFAULT_VAL 1800000
+//#define MICBIAS_DEFAULT_VAL 1800000
+#define MICBIAS_DEFAULT_VAL 2800000
 #define MICBIAS_MIN_VAL 1600000
 #define MICBIAS_STEP_SIZE 50000
 
@@ -3422,11 +3429,9 @@ static int msm8x16_wcd_codec_enable_dmic(struct snd_soc_dapm_widget *w,
 			snd_soc_update_bits(codec, dmic_clk_reg,
 					dmic_clk_en, dmic_clk_en);
 		}
-		if (dmic == 1)
-			snd_soc_update_bits(codec,
+		snd_soc_update_bits(codec,
 			MSM8X16_WCD_A_CDC_TX1_DMIC_CTL, 0x07, 0x01);
-		if (dmic == 2)
-			snd_soc_update_bits(codec,
+		snd_soc_update_bits(codec,
 			MSM8X16_WCD_A_CDC_TX2_DMIC_CTL, 0x07, 0x01);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
@@ -3592,7 +3597,7 @@ static int msm8x16_wcd_codec_enable_micbias(struct snd_soc_dapm_widget *w,
 		if (get_codec_version(msm8x16_wcd) <= TOMBAK_2_0)
 			usleep_range(20000, 20100);
 		if (strnstr(w->name, internal1_text, strlen(w->name))) {
-			snd_soc_update_bits(codec, micb_int_reg, 0x40, 0x40);
+			snd_soc_update_bits(codec, micb_int_reg, 0x40, 0x00);
 		} else if (strnstr(w->name, internal2_text,  strlen(w->name))) {
 			snd_soc_update_bits(codec, micb_int_reg, 0x08, 0x08);
 			msm8x16_notifier_call(codec,
@@ -4558,10 +4563,12 @@ static const struct snd_soc_dapm_route audio_map[] = {
 	{"IIR2 INP1 MUX", "DEC2", "DEC2 MUX"},
 	{"MIC BIAS Internal1", NULL, "INT_LDO_H"},
 	{"MIC BIAS Internal2", NULL, "INT_LDO_H"},
+	{"MIC BIAS Internal3", NULL, "INT_LDO_H"},
 	{"MIC BIAS External", NULL, "INT_LDO_H"},
 	{"MIC BIAS External2", NULL, "INT_LDO_H"},
 	{"MIC BIAS Internal1", NULL, "MICBIAS_REGULATOR"},
 	{"MIC BIAS Internal2", NULL, "MICBIAS_REGULATOR"},
+	{"MIC BIAS Internal3", NULL, "MICBIAS_REGULATOR"},
 	{"MIC BIAS External", NULL, "MICBIAS_REGULATOR"},
 	{"MIC BIAS External2", NULL, "MICBIAS_REGULATOR"},
 };
@@ -5461,6 +5468,12 @@ static struct regulator *wcd8x16_wcd_codec_find_regulator(
 {
 	int i;
 
+	if(!strcmp(MSM89XX_VDD_SPKDRV_NAME, name)){
+        dev_dbg(msm8x16->dev, "this project does not support:%s\n"
+                               , name);
+        return NULL;
+    }
+
 	for (i = 0; i < msm8x16->num_of_supplies; i++) {
 		if (msm8x16->supplies[i].supply &&
 		    !strcmp(msm8x16->supplies[i].supply, name))
@@ -5698,6 +5711,232 @@ static void msm8x16_wcd_set_boost_v(struct snd_soc_codec *codec)
 	snd_soc_update_bits(codec, MSM8X16_WCD_A_ANALOG_OUTPUT_VOLTAGE,
 			0x1F, msm8x16_wcd_priv->boost_voltage);
 }
+/* ASUS_BSP tyree_liu +++ */
+#ifdef CONFIG_PROC_FS
+#define AUDIO_DEBUG_PROC_FILE "driver/audio_debug_reg"
+
+static struct proc_dir_entry *audio_debug_proc_file;
+static mm_segment_t oldfs;
+
+static void initKernelEnv(void)
+{
+	oldfs = get_fs();
+	set_fs(KERNEL_DS);
+}
+
+static void deinitKernelEnv(void)
+{
+	set_fs(oldfs);
+}
+
+
+static ssize_t audio_debug_proc_write(struct file *filp, const char __user *buff, size_t len, loff_t *off)
+{
+	char messages[256];
+	//bool isBuildType_user =false;
+	memset(messages, 0, sizeof(messages));
+	printk("[Audio][Debug] audio_debug_proc_write no audbg switch\n");
+
+	if (len > 256)
+		len = 256;
+	if (copy_from_user(messages, buff, len))
+		return -EFAULT;
+
+	initKernelEnv();
+
+	if (strncmp(messages, "read", strlen("read")) == 0) {
+		unsigned int reg, value;
+		sscanf(messages + 5, "%x", &reg);
+		value = snd_soc_read(registered_codec, reg);
+		printk("[Audio][codec] read register reg[0x%x]=[0x%x]\n", reg, value);
+	} else if (strncmp(messages, "write", strlen("write")) == 0) {
+		unsigned int reg, value;
+		sscanf(messages + 6, "%x %x", &reg, &value);
+		snd_soc_write(registered_codec, reg, value);
+		value = snd_soc_read(registered_codec, reg);
+		printk("[Audio][codec] write register reg[0x%x]=[0x%x]\n", reg, value);
+	} else if (strncmp(messages, "update", strlen("update")) == 0) {
+		unsigned int reg, mask, value;
+		sscanf(messages + 7, "%x %x %x", &reg, &mask, &value);
+		snd_soc_update_bits(registered_codec, reg, mask, value);
+		value = snd_soc_read(registered_codec, reg);
+		printk("[Audio][codec] update register reg[0x%x]=[0x%x]\n", reg, value);
+#if 0
+	} else if (strncmp(messages, "dump", strlen("dump")) == 0) {
+		unsigned int val;
+		int i;
+		for (i = 0; i <= MSM8X16_WCD_A_CDC_TX2_DMIC_CTL; i++) {
+			val = snd_soc_read(registered_codec, i);
+			if (!val)
+				continue;
+			printk("[Audio][codec] dump register reg[0x%x]=[0x%x]\n", i, val);
+		}
+#endif
+	} else {
+		printk("[Audio][Debug] %s\n", messages);
+	}
+
+	deinitKernelEnv();
+	return len;
+}
+
+static ssize_t audio_debug_proc_read(struct file *filp, char __user *buff, size_t len, loff_t *off)
+{
+	char messages[256];
+
+	if (*off)
+		return 0;
+
+	memset(messages, 0, sizeof(messages));
+	if (len > 256)
+		len = 256;
+
+		switch (g_msm8x16_wcd_priv->mbhc.current_plug) {
+		case MBHC_PLUG_TYPE_HEADSET:
+			sprintf(messages, "1\n");
+			break;
+		case MBHC_PLUG_TYPE_HEADPHONE:
+			sprintf(messages, "2\n");
+			break;
+		case MBHC_PLUG_TYPE_HIGH_HPH:
+			sprintf(messages, "3\n");
+			break;
+		case MBHC_PLUG_TYPE_GND_MIC_SWAP:
+			sprintf(messages, "4\n");
+			break;
+		default:
+			sprintf(messages, "0\n");
+			break;
+		}
+
+	if (copy_to_user(buff, messages, len))
+		return -EFAULT;
+
+	(*off)++;
+	return len;
+}
+
+static struct file_operations audio_debug_proc_ops = {
+	.read = audio_debug_proc_read,
+	.write = audio_debug_proc_write,
+};
+
+static void create_audio_debug_proc_file(void)
+{
+	printk("[Audio][Debug] create_audio_debug_proc_file\n");
+	audio_debug_proc_file = proc_create(AUDIO_DEBUG_PROC_FILE, 0666, NULL, &audio_debug_proc_ops);
+
+	if (audio_debug_proc_file == NULL)
+		printk("[Audio][Debug] create_audio_debug_proc_file failed\n");
+}
+
+static void remove_audio_debug_proc_file(void)
+{
+	extern struct proc_dir_entry proc_root;
+	printk("[Audio][Debug] remove_audio_debug_proc_file\n");
+	remove_proc_entry(AUDIO_DEBUG_PROC_FILE, &proc_root);
+}
+
+
+
+//cj +++
+#define AUDIO_DEBUG_PROC_FILE2 "driver/audio_debug"
+static int is_audio_debug = 0;
+static struct proc_dir_entry *audio_debug_proc_file2;
+
+static ssize_t audio_debug_proc_write2(struct file *filp, const char __user *buff, size_t len, loff_t *off)
+{
+	char messages[256];
+	memset(messages, 0, sizeof(messages));
+	printk("[Audio][Debug] audio_debug_proc_write g_gpio_audio_debug=%d,is_audio_debug=%d\n",g_gpio_audio_debug,is_audio_debug);
+
+	if (len > 256)
+		len = 256;
+	if (copy_from_user(messages, buff, len))
+		return -EFAULT;
+
+	initKernelEnv();
+
+	if (strncmp(messages, "1", 1) == 0) {
+			gpio_direction_output(g_gpio_audio_debug, 0); /* enable uart log, disable audio */
+			is_audio_debug = 1;
+	} else if (strncmp(messages, "0", 1) == 0) {
+			gpio_direction_output(g_gpio_audio_debug, 1); /* disable uart log, enable audio */
+			is_audio_debug = 0;
+	} else {
+		pr_err("[Audio][Debug] %s\n", messages);
+	}
+	pr_err("[Audio][Debug] Audio debug mode=%d, audio_debug_gpio_value= %d!!\n",is_audio_debug,gpio_get_value(g_gpio_audio_debug));
+
+	deinitKernelEnv();
+	return len;
+}
+
+static ssize_t audio_debug_proc_read2(struct file *filp, char __user *buff, size_t len, loff_t *off)
+{
+	char messages[256];
+
+	if (*off)
+		return 0;
+
+	memset(messages, 0, sizeof(messages));
+	if (len > 256)
+		len = 256;
+
+	if (is_audio_debug)
+		sprintf(messages, "Audio debug mode\n");
+	else {
+		switch (g_msm8x16_wcd_priv->mbhc.current_plug) {
+		case MBHC_PLUG_TYPE_HEADSET:
+			sprintf(messages, "1\n");
+			break;
+		case MBHC_PLUG_TYPE_HEADPHONE:
+			sprintf(messages, "2\n");
+			break;
+		case MBHC_PLUG_TYPE_HIGH_HPH:
+			sprintf(messages, "3\n");
+			break;
+		case MBHC_PLUG_TYPE_GND_MIC_SWAP:
+			sprintf(messages, "4\n");
+			break;
+		default:
+			sprintf(messages, "0\n");
+			break;
+		}
+	}
+
+	if (copy_to_user(buff, messages, len))
+		return -EFAULT;
+
+	(*off)++;
+	return len;
+}
+
+static struct file_operations audio_debug_proc_ops2 = {
+	.read = audio_debug_proc_read2,
+	.write = audio_debug_proc_write2,
+};
+
+static void create_audio_debug_proc_file2(void)
+{
+	printk("[Audio][Debug] create_audio_debug_proc_file\n");
+	audio_debug_proc_file2 = proc_create(AUDIO_DEBUG_PROC_FILE2, 0666, NULL, &audio_debug_proc_ops2);
+
+	if (audio_debug_proc_file2 == NULL)
+		printk("[Audio][Debug] create_audio_debug_proc_file failed\n");
+}
+
+static void remove_audio_debug_proc_file2(void)
+{
+	extern struct proc_dir_entry proc_root;
+	printk("[Audio][Debug] remove_audio_debug_proc_file\n");
+	remove_proc_entry(AUDIO_DEBUG_PROC_FILE2, &proc_root);
+}
+//cj ---
+
+
+#endif /* #ifdef CONFIG_PROC_FS */
+/* ASUS_BSP tyree_liu --- */
 
 static void msm8x16_wcd_configure_cap(struct snd_soc_codec *codec,
 		bool micbias1, bool micbias2)
@@ -5731,6 +5970,7 @@ static void msm8x16_wcd_configure_cap(struct snd_soc_codec *codec,
 		snd_soc_update_bits(codec, MSM8X16_WCD_A_ANALOG_MICB_1_EN,
 				0x40, 0x00);
 	}
+
 }
 
 static int msm8x16_wcd_codec_probe(struct snd_soc_codec *codec)
@@ -5879,6 +6119,37 @@ static int msm8x16_wcd_codec_probe(struct snd_soc_codec *codec)
 		registered_codec = NULL;
 		return -ENOMEM;
 	}
+	/* ASUS_BSP tyree_liu +++ */
+	g_msm8x16_wcd_priv = msm8x16_wcd_priv;
+
+	ret = gpio_request(g_gpio_audio_debug, "AUDIO_DEBUG");
+	if (ret) {
+		printk("%s: Failed to request gpio AUDIO_DEBUG %d, ret %d\n", __func__, g_gpio_audio_debug, ret);
+	} 
+#if 0
+	else {
+		//sherry ++ force audio mode for MP_user
+		#ifdef ASUS_SHIP_BUILD
+		if(asus_hw_id == ASUS_PR2 )
+			g_user_dbg_mode = 0;
+		#endif
+		//sherry --
+		if (g_user_dbg_mode == 1) {
+			gpio_direction_output(g_gpio_audio_debug, 0);/* enable uart log, disable audio */
+			wcd_mbhc_plug_detect_for_debug_mode(&g_msm8x16_wcd_priv->mbhc, 1);
+		} else {
+			gpio_direction_output(g_gpio_audio_debug, 1);/* disable uart log, enable audio */
+			wcd_mbhc_plug_detect_for_debug_mode(&g_msm8x16_wcd_priv->mbhc, 0);
+		}
+	}
+#endif
+
+#ifdef CONFIG_PROC_FS
+	create_audio_debug_proc_file();
+	create_audio_debug_proc_file2();
+#endif
+	codec_status=1;
+	/* ASUS_BSP tyree_liu --- */
 	return 0;
 }
 
@@ -5895,7 +6166,12 @@ static int msm8x16_wcd_codec_remove(struct snd_soc_codec *codec)
 	iounmap(msm8x16_wcd->dig_base);
 	kfree(msm8x16_wcd_priv->fw_data);
 	kfree(msm8x16_wcd_priv);
-
+	/* ASUS_BSP tyree_liu +++ */
+#ifdef CONFIG_PROC_FS
+	remove_audio_debug_proc_file();
+	remove_audio_debug_proc_file2();
+#endif
+/* ASUS_BSP tyree_liu --- */
 	return 0;
 }
 

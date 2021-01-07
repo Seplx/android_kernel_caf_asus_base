@@ -1664,7 +1664,11 @@ static int qpnp_wled_parse_dt(struct qpnp_wled *wled)
 			"qcom,en-phase-stag");
 	wled->en_cabc = of_property_read_bool(spmi->dev.of_node,
 			"qcom,en-cabc");
-
+//<ASUS_BSP Hank2_Liu>Disable Cabc mode In Factory image ++++++
+#ifdef ASUS_FACTORY_BUILD
+	wled->en_cabc =0;
+#endif
+//<ASUS_BSP Hank2_Liu>Disable Cabc mode In Factory image ------
 	prop = of_find_property(spmi->dev.of_node,
 			"qcom,led-strings-list", &temp_val);
 	if (!prop || !temp_val || temp_val > QPNP_WLED_MAX_STRINGS) {
@@ -1804,13 +1808,19 @@ static struct spmi_driver qpnp_wled_driver = {
 
 static int __init qpnp_wled_init(void)
 {
-	return spmi_driver_register(&qpnp_wled_driver);
+	if((ASUS_ZD552KL_PHOENIX != asus_project_id) && (ASUS_ZE553KL != asus_project_id)){
+		return spmi_driver_register(&qpnp_wled_driver);
+	}else
+		return 0;
 }
 module_init(qpnp_wled_init);
 
 static void __exit qpnp_wled_exit(void)
 {
-	spmi_driver_unregister(&qpnp_wled_driver);
+	if((ASUS_ZD552KL_PHOENIX != asus_project_id) && (ASUS_ZE553KL != asus_project_id)){
+		spmi_driver_unregister(&qpnp_wled_driver);
+	}else
+		return ;
 }
 module_exit(qpnp_wled_exit);
 

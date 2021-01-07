@@ -23,6 +23,9 @@
 #include "leds.h"
 
 static struct class *leds_class;
+//<ASUSBSP Robert_He>20170604 add vkled support for white/black panel+++
+char color_id_code[51] = {'w'};
+//<ASUSBSP Robert_He>20170604 add vkled support for white/black panel---
 
 static ssize_t brightness_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -52,7 +55,6 @@ static ssize_t brightness_store(struct device *dev,
 	ret = kstrtoul(buf, 10, &state);
 	if (ret)
 		goto unlock;
-
 	led_cdev->usr_brightness_req = state;
 	__led_set_brightness(led_cdev, state);
 
@@ -88,6 +90,36 @@ static ssize_t max_brightness_store(struct device *dev,
 	return size;
 }
 static DEVICE_ATTR_RW(max_brightness);
+//<ASUSBSP Robert_He>20170604 add vkled support for white/black panel+++
+static ssize_t color_id_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE,"%s\n", color_id_code);
+}
+
+static ssize_t color_id_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	ssize_t ret;
+
+	mutex_lock(&led_cdev->led_access);
+
+	if (led_sysfs_is_disabled(led_cdev)) {
+		ret = -EBUSY;
+		goto unlock;
+	}
+
+	memset(color_id_code, 0, sizeof(color_id_code));
+	sprintf(color_id_code, "%s", buf);
+	ret = size;
+unlock:
+	mutex_unlock(&led_cdev->led_access);
+	return ret;
+}
+static DEVICE_ATTR_RW(color_id);
+//<ASUSBSP Robert_He>20170604 add vkled support for white/black panel---
+
 
 #ifdef CONFIG_LEDS_TRIGGERS
 static DEVICE_ATTR(trigger, 0644, led_trigger_show, led_trigger_store);
@@ -103,6 +135,9 @@ static const struct attribute_group led_trigger_group = {
 static struct attribute *led_class_attrs[] = {
 	&dev_attr_brightness.attr,
 	&dev_attr_max_brightness.attr,
+//<ASUSBSP Robert_He>20170604 add vkled support for white/black panel+++
+	&dev_attr_color_id.attr,
+//<ASUSBSP Robert_He>20170604 add vkled support for white/black panel---
 	NULL,
 };
 

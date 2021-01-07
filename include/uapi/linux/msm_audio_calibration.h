@@ -44,6 +44,21 @@
 							217, void *)
 #define AUDIO_SET_RTAC_AFE_CAL		_IOWR(CAL_IOCTL_MAGIC, \
 							218, void *)
+//<anna-cheng>for proximity near close touch in call
+#define AUDIO_SET_MODE		_IOWR(CAL_IOCTL_MAGIC, \
+							219, void *)
+extern int get_audiomode(void);
+//<anna-cheng>for proximity near close touch in call
+
+//sherry ++ for audiowizard
+#define AUDIO_SET_AUDIOWIZARD_FORCE_PRESET	_IOWR(CAL_IOCTL_MAGIC, \
+ 							221, void *)
+//sherry -- for audiowizard
+/* ASUS_BSP +++ */
+#define AUDIO_GET_HS_IMP			_IOWR(CAL_IOCTL_MAGIC, \
+							230, void *)
+/* ASUS_BSP --- */
+
 enum {
 	CVP_VOC_RX_TOPOLOGY_CAL_TYPE = 0,
 	CVP_VOC_TX_TOPOLOGY_CAL_TYPE,
@@ -98,6 +113,15 @@ enum {
 	ULP_LSM_TOPOLOGY_ID_CAL_TYPE,
 	AFE_FB_SPKR_PROT_TH_VI_CAL_TYPE,
 	AFE_FB_SPKR_PROT_EX_VI_CAL_TYPE,
+//<anna-cheng>for proximity near close touch in call
+	SET_MODE_TYPE,
+//<anna-cheng>for proximity near close touch in call
+	/* ASUS_BSP +++*/
+	GET_IMP_TYPE,
+	/* ASUS_BSP ---*/
+	//sherry++ for audiowizard
+	AUDIOWIZARD_FORCE_PRESET_TYPE,
+	//sherry --
 	MAX_CAL_TYPES,
 };
 

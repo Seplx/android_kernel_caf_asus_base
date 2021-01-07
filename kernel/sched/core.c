@@ -93,6 +93,9 @@
 #include "../workqueue_internal.h"
 #include "../smpboot.h"
 
+#include <linux/asus_global.h>
+extern struct _asus_global asus_global;
+extern struct completion fake_completion;
 #define CREATE_TRACE_POINTS
 #include <trace/events/sched.h>
 
@@ -6333,6 +6336,28 @@ need_resched:
 
 		set_task_last_switch_out(prev, wallclock);
 
+		switch (cpu) {
+			case 0:
+				asus_global.pprev_cpu0 = prev;
+				asus_global.pnext_cpu0 = next;
+	 			break;
+			case 1:
+				asus_global.pprev_cpu1 = prev;
+				asus_global.pnext_cpu1 = next;
+	 			break;
+			case 2:
+				asus_global.pprev_cpu2 = prev;
+				asus_global.pnext_cpu2 = next;
+	 			break;
+			case 3:
+				asus_global.pprev_cpu3 = prev;
+				asus_global.pnext_cpu3 = next;
+	 			break;
+			case 4:
+				asus_global.pprev_cpu0 = prev;
+				asus_global.pnext_cpu0 = next;
+	 			break;
+		}
 		context_switch(rq, prev, next); /* unlocks the rq */
 		/*
 		 * The context switch have flipped the stack from under us

@@ -794,6 +794,76 @@ err_out:
 }
 EXPORT_SYMBOL(devfreq_remove_governor);
 
+struct devfreq * find_devfreq(const char *devname)
+{
+	struct device * tmp_dev;
+	struct devfreq *buf_devfreq;
+	struct devfreq *tmp_devfreq;
+	int name_len = strlen(devname);
+	list_for_each_entry(buf_devfreq, &devfreq_list, node) {
+		tmp_devfreq = buf_devfreq;
+		tmp_dev = tmp_devfreq->dev.parent;
+		if (!strncmp((tmp_dev->kobj).name, devname, name_len))
+		{
+			return tmp_devfreq;
+		}
+	}
+	return NULL;
+}
+int governor_check(const char *devname ,char *governor_name)
+{
+	struct devfreq * devfreq = find_devfreq(devname);
+	int governorname_len;
+	governorname_len = strlen(devfreq->governor->name);
+	if(governorname_len > DEVFREQ_NAME_LEN )
+	{
+		printk("error: governorname_len > DEVFREQ_NAME_LEN\n");
+		return -EINVAL;
+	}
+	strncpy(governor_name,devfreq->governor->name,DEVFREQ_NAME_LEN);
+	return 0;
+}
+EXPORT_SYMBOL(governor_check);
+
+int governor_change(const char *devname,char * governorname)
+{
+	struct devfreq * devfreq = NULL;
+    struct devfreq_governor *governor;
+    //struct devfreq_governor *tmp_governor;
+    char str_governor[DEVFREQ_NAME_LEN + 1];
+    //char * governor_name ;
+    int ret;
+
+    ret = sscanf(governorname, "%" __stringify(DEVFREQ_NAME_LEN) "s", str_governor);
+	if (ret != 1)
+		return -EINVAL;
+
+    mutex_lock(&devfreq_list_lock);
+    devfreq = find_devfreq(devname);
+    governor = find_devfreq_governor(str_governor);
+	if (devfreq->governor == governor)
+			goto out;
+
+	if (devfreq->governor) {
+		ret = devfreq->governor->event_handler(devfreq, DEVFREQ_GOV_STOP, NULL);
+		if (ret) {
+			printk( "%s: Governor %s not stopped(%d)\n",
+					 __func__, devfreq->governor->name, ret);
+			goto out;
+			}
+	}
+	devfreq->governor = governor;
+	strncpy(devfreq->governor_name, governor->name, DEVFREQ_NAME_LEN);
+	ret = devfreq->governor->event_handler(devfreq, DEVFREQ_GOV_START, NULL);
+	printk( "%s: change governor to  %s\n" , __func__, devfreq->governor->name);
+	out:
+	mutex_unlock(&devfreq_list_lock);
+	return ret;
+}
+EXPORT_SYMBOL(governor_change);
+
+
+
 static ssize_t governor_show(struct device *dev,
 			     struct device_attribute *attr, char *buf)
 {
@@ -853,12 +923,13 @@ static ssize_t available_governors_show(struct device *d,
 {
 	struct devfreq_governor *tmp_governor;
 	ssize_t count = 0;
-
 	mutex_lock(&devfreq_list_lock);
 	list_for_each_entry(tmp_governor, &devfreq_governor_list, node)
 		count += scnprintf(&buf[count], (PAGE_SIZE - count - 2),
 				   "%s ", tmp_governor->name);
 	mutex_unlock(&devfreq_list_lock);
+
+
 
 	/* Truncate the trailing space */
 	if (count)

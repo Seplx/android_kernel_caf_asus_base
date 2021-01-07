@@ -322,6 +322,13 @@ struct device_node *of_batterydata_get_best_profile(
 	int delta = 0, best_delta = 0, best_id_kohm = 0, id_range_pct,
 		batt_id_kohm = 0, i = 0, rc = 0, limit = 0;
 	bool in_range = false;
+	#ifndef ZD552KL_PHOENIX
+	#ifdef ZS550KL
+	char *batt_name="asus_aquarius_3000mah";
+	#else
+	char *batt_name="asus_hades_4850mah_er";
+	#endif
+	#endif
 
 	psy = power_supply_get_by_name(psy_name);
 	if (!psy) {
@@ -349,11 +356,19 @@ struct device_node *of_batterydata_get_best_profile(
 			return ERR_PTR(-ENXIO);
 		}
 	}
+	printk("batt_id=%dkohm, batt-id-range=%d\n",batt_id_kohm,id_range_pct);
 
 	/*
 	 * Find the battery data with a battery id resistor closest to this one
 	 */
 	for_each_child_of_node(batterydata_container_node, node) {
+		of_property_read_string(node, "qcom,battery-type",
+							&battery_type);
+		#ifndef ZD552KL_PHOENIX
+		if(strcmp(battery_type, batt_name) == 0){
+			printk("of_batterydata_get_best_profile load %s\n",battery_type);
+			return node;}
+		#endif
 		if (batt_type != NULL) {
 			rc = of_property_read_string(node, "qcom,battery-type",
 							&battery_type);
@@ -372,6 +387,7 @@ struct device_node *of_batterydata_get_best_profile(
 				delta = abs(batt_ids.kohm[i] - batt_id_kohm);
 				limit = (batt_ids.kohm[i] * id_range_pct) / 100;
 				in_range = (delta <= limit);
+				pr_info("batt_id in profile=%dkohm, %s in range\n",batt_ids.kohm[i],in_range? "is":"not");
 				/*
 				 * Check if the delta is the lowest one
 				 * and also if the limits are in range

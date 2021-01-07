@@ -114,6 +114,15 @@
 #define MDSS_MDP_HW_REV_116	MDSS_MDP_REV(1, 16, 0) /* msm8953 */
 #define MDSS_MDP_HW_REV_300	MDSS_MDP_REV(3, 0, 0)  /* msmcobalt */
 #define MDSS_MDP_HW_REV_301	MDSS_MDP_REV(3, 0, 1)  /* msmcobalt v1.0 */
+//ASUS_BSP: Hank2_Liu, cabc mode +++
+enum {
+       OFF_MODE = 0x0,
+       UI_MODE,
+       Still_MODE,
+       Moving_MODE,
+};
+//ASUS_BSP: Hank2_Liu, cabc mode ---
+
 
 enum {
 	NOTIFY_UPDATE_INIT,

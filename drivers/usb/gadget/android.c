@@ -497,6 +497,7 @@ static void android_work(struct work_struct *data)
 
 #define MIN_DISCONNECT_DELAY_MS	30
 
+extern void dpNotify(void);
 static int android_enable(struct android_dev *dev)
 {
 	struct usb_composite_dev *cdev = dev->cdev;
@@ -535,7 +536,7 @@ static int android_enable(struct android_dev *dev)
 		else
 			pr_debug("defer gadget connect until usersapce opens video device\n");
 	}
-
+	dpNotify();
 	return err;
 }
 

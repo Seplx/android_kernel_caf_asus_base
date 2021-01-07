@@ -531,7 +531,7 @@ struct mmc_host {
 
 	int			dsr_req;	/* DSR value is valid */
 	u32			dsr;	/* optional driver stage (DSR) value */
-
+	unsigned int sd_status;//<ASUS_BSP +++ Hank2_Liu 20170302> Add sd_status Node for ATD ------
 #ifdef CONFIG_MMC_EMBEDDED_SDIO
 	struct {
 		struct sdio_cis			*cis;

@@ -35,6 +35,9 @@
 #include <soc/qcom/smem.h>
 #include <soc/qcom/boot_stats.h>
 
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+
 #define BUILD_ID_LENGTH 32
 #define SMEM_IMAGE_VERSION_BLOCKS_COUNT 32
 #define SMEM_IMAGE_VERSION_SINGLE_BLOCK_SIZE 128
@@ -1577,3 +1580,77 @@ int __init socinfo_init(void)
 	return 0;
 }
 subsys_initcall(socinfo_init);
+
+//<ASUS-BSP-Jessie_Tian-20161031>create proc/bootinfo node to get fw version+++
+static void
+msm_get_boot_image_version(struct seq_file *s, image_index_type image_index, const char* image_name, bool show_oem_version)
+{
+	char *string_address;
+	char *oem_version;
+	char *qc_version;
+
+	string_address = socinfo_get_image_version_base_address();
+	if (string_address == NULL) {
+		pr_err("%s : Failed to get image version base address",
+				__func__);
+		return;
+	}
+	string_address += image_index * SMEM_IMAGE_VERSION_SINGLE_BLOCK_SIZE;
+
+	seq_printf(s, "%s: ", image_name);
+	if(show_oem_version)
+	{
+		oem_version = string_address + SMEM_IMAGE_VERSION_OEM_OFFSET;
+		seq_printf(s, "%-.32s\n", oem_version);
+	}
+	else
+	{
+		qc_version = string_address;
+		if(strlen(qc_version) >= 3 && qc_version[2] == ':')
+		{
+			qc_version += 3;
+		}
+		seq_printf(s, "%-.75s\n", qc_version);
+	}
+}
+
+static int soc_boot_info_show(struct seq_file *s, void *unused)
+{
+	//oem_get_soc_info_str(s);
+	//oem_get_memory_str(s);
+	//oem_get_sku_id_str(s);
+
+	msm_get_boot_image_version(s, IMAGE_INDEX_SBL, "SBL", true);
+	msm_get_boot_image_version(s, IMAGE_INDEX_TZ, "TZ", false);
+	msm_get_boot_image_version(s, IMAGE_INDEX_RPM, "RPM", true);
+	msm_get_boot_image_version(s, IMAGE_INDEX_APPSBL, "ABOOT", true);
+	msm_get_boot_image_version(s, IMAGE_INDEX_MPSS, "MPSS", false);
+	msm_get_boot_image_version(s, IMAGE_INDEX_ADSP, "ADSP", true);
+	msm_get_boot_image_version(s, IMAGE_INDEX_WCNS, "WCNSS", false);
+
+	return 0;
+}
+
+static int soc_boot_info_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, soc_boot_info_show, NULL);
+}
+
+static const struct file_operations soc_boot_info_fops = {
+	.open		= soc_boot_info_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
+static int __init soc_boot_info_proc_init(void)
+{
+	proc_create_data("bootinfo", S_IRUSR | S_IRGRP,
+			NULL, &soc_boot_info_fops, NULL);
+	return 0;
+}
+
+late_initcall(soc_boot_info_proc_init);
+//<ASUS-BSP-Jessie_Tian-20161031>create proc/bootinfo node to get fw version---
+
+

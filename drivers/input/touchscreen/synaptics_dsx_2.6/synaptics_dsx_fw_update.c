@@ -39,13 +39,32 @@
 #include <linux/input.h>
 #include <linux/firmware.h>
 #include <linux/platform_device.h>
-#include <linux/input/synaptics_dsx_v2_6.h>
+#include <linux/input/synaptics_dsx.h>
+#include <linux/gpio.h>
 #include "synaptics_dsx_core.h"
 
-#define FW_IMAGE_NAME "synaptics/startup_fw_update.img"
-/*
+//<ASUS+>#define FW_IMAGE_NAME "synaptics/startup_fw_update.img"
+
+//EDO
+//#define FW_IMAGE_NAME_ZE553KL "synaptics/PR1959551-s3508r_hybrid_GestureOn_20160919.img"
+//#define FW_IMAGE_NAME_ZE553KL "synaptics/PR2424644-s3508t_hybrid_cdm10_asus_00050007.img"
+//#define FW_IMAGE_NAME_ZE553KL "synaptics/PR2474684-s3508r_hybrid_cdm10_asus_20160002.img"
+//#define FW_IMAGE_NAME_ZE553KL "synaptics/PR2474684-s3508r_hybrid_cdm10_asus_101816.img"
+//#define FW_IMAGE_NAME_ZE553KL "synaptics/PR2474684_45440004_S3508R_102616.img"
+//#define FW_IMAGE_NAME_ZE553KL_EDO "synaptics/PR2507195-45440006-S3508R_111616.img"
+#define FW_IMAGE_NAME_ZE553KL_EDO "synaptics/PR2555971_45440009_s3508r_EDO_20170302.img"
+
+
+//TM
+//#define FW_IMAGE_NAME_ZE553KL_TM "synaptics/PR2515137-s3508r_tianma_20161230.img"
+//#define FW_IMAGE_NAME_ZE553KL_TM "synaptics/PR2547188_544D0001_s3508r_TM_20170223.img"
+//#define FW_IMAGE_NAME_ZE553KL_TM "synaptics/PR2555971_544D0002_s3508r_TM_20170306.img"
+//#define FW_IMAGE_NAME_ZE553KL_TM "synaptics/PR2555971_544D0004_s3508r_TM_20170313.img"
+#define FW_IMAGE_NAME_ZE553KL_TM "synaptics/PR2555971_544D0005_s3508r_TM_20170313.img"
+//<ASUS+>/*
 #define DO_STARTUP_FW_UPDATE
-*/
+//<ASUS+>*/
+
 /*
 #ifdef DO_STARTUP_FW_UPDATE
 #ifdef CONFIG_FB
@@ -55,6 +74,7 @@
 #endif
 #endif
 */
+
 #define FORCE_UPDATE false
 #define DO_LOCKDOWN false
 
@@ -126,6 +146,10 @@
 static int fwu_do_reflash(void);
 
 static int fwu_recovery_check_status(void);
+
+int fw_update_state = 0;
+
+extern int asus_lcd_id;
 
 static ssize_t fwu_sysfs_show_image(struct file *data_file,
 		struct kobject *kobj, struct bin_attribute *attributes,
@@ -662,55 +686,63 @@ static struct bin_attribute dev_attr_data = {
 
 static struct device_attribute attrs[] = {
 	__ATTR(dorecovery, S_IWUSR | S_IWGRP,
-			NULL,
+			synaptics_rmi4_show_error,
 			fwu_sysfs_do_recovery_store),
 	__ATTR(doreflash, S_IWUSR | S_IWGRP,
-			NULL,
+			synaptics_rmi4_show_error,
 			fwu_sysfs_do_reflash_store),
 	__ATTR(writeconfig, S_IWUSR | S_IWGRP,
-			NULL,
+			synaptics_rmi4_show_error,
 			fwu_sysfs_write_config_store),
 	__ATTR(readconfig, S_IWUSR | S_IWGRP,
-			NULL,
+			synaptics_rmi4_show_error,
 			fwu_sysfs_read_config_store),
 	__ATTR(configarea, S_IWUSR | S_IWGRP,
-			NULL,
+			synaptics_rmi4_show_error,
 			fwu_sysfs_config_area_store),
 	__ATTR(imagename, S_IWUSR | S_IWGRP,
-			NULL,
+			synaptics_rmi4_show_error,
 			fwu_sysfs_image_name_store),
 	__ATTR(imagesize, S_IWUSR | S_IWGRP,
-			NULL,
+			synaptics_rmi4_show_error,
 			fwu_sysfs_image_size_store),
 	__ATTR(blocksize, S_IRUGO,
 			fwu_sysfs_block_size_show,
-			NULL),
+			synaptics_rmi4_store_error),
 	__ATTR(fwblockcount, S_IRUGO,
 			fwu_sysfs_firmware_block_count_show,
-			NULL),
+			synaptics_rmi4_store_error),
 	__ATTR(configblockcount, S_IRUGO,
 			fwu_sysfs_configuration_block_count_show,
-			NULL),
+			synaptics_rmi4_store_error),
 	__ATTR(dispconfigblockcount, S_IRUGO,
 			fwu_sysfs_disp_config_block_count_show,
-			NULL),
+			synaptics_rmi4_store_error),
 	__ATTR(permconfigblockcount, S_IRUGO,
 			fwu_sysfs_perm_config_block_count_show,
-			NULL),
+			synaptics_rmi4_store_error),
 	__ATTR(blconfigblockcount, S_IRUGO,
 			fwu_sysfs_bl_config_block_count_show,
-			NULL),
+			synaptics_rmi4_store_error),
 	__ATTR(guestcodeblockcount, S_IRUGO,
 			fwu_sysfs_guest_code_block_count_show,
-			NULL),
+			synaptics_rmi4_store_error),
 	__ATTR(writeguestcode, S_IWUSR | S_IWGRP,
-			NULL,
+			synaptics_rmi4_show_error,
 			fwu_sysfs_write_guest_code_store),
 };
 
 static struct synaptics_rmi4_fwu_handle *fwu;
 
 DECLARE_COMPLETION(fwu_remove_complete);
+
+static unsigned int be_to_uint(const unsigned char *ptr)
+{
+	return (unsigned int)ptr[3] +
+			(unsigned int)ptr[2] * 0x100 +
+			(unsigned int)ptr[1] * 0x10000 +
+			(unsigned int)ptr[0] * 0x1000000;
+}
 
 static unsigned int le_to_uint(const unsigned char *ptr)
 {
@@ -1135,7 +1167,7 @@ static int fwu_read_flash_status(void)
 			sizeof(status));
 	if (retval < 0) {
 		dev_err(rmi4_data->pdev->dev.parent,
-				"%s: Failed to read flash status\n",
+				"%s: Failed to relash status\n",
 				__func__);
 		return retval;
 	}
@@ -1969,6 +2001,7 @@ static int fwu_write_f34_v5v6_blocks(unsigned char *block_ptr,
 	unsigned short blk;
 	struct synaptics_rmi4_data *rmi4_data = fwu->rmi4_data;
 
+	dev_info(rmi4_data->pdev->dev.parent, "%s fw update start\n", __func__);
 	base = fwu->f34_fd.data_base_addr;
 
 	block_number[1] |= (fwu->config_area << 5);
@@ -2014,7 +2047,9 @@ static int fwu_write_f34_v5v6_blocks(unsigned char *block_ptr,
 
 		block_ptr += fwu->block_size;
 	}
-
+	
+	dev_info(rmi4_data->pdev->dev.parent, "%s fw update finished\n", __func__);
+		
 	return 0;
 }
 
@@ -2205,7 +2240,8 @@ static int fwu_get_image_firmware_id(unsigned int *fw_id)
 		strptr = strnstr(fwu->image_name, "PR", MAX_IMAGE_NAME_LEN);
 		if (!strptr) {
 			dev_err(rmi4_data->pdev->dev.parent,
-					"%s: No valid PR number (PRxxxxxxx) found in image file name (%s)\n",
+					"%s: No valid PR number (PRxxxxxxx) "
+					"found in image file name (%s)\n",
 					__func__, fwu->image_name);
 			return -EINVAL;
 		}
@@ -2261,10 +2297,12 @@ static enum flash_area fwu_go_nogo(void)
 {
 	int retval;
 	enum flash_area flash_area = NONE;
-	unsigned char ii;
+	//unsigned char ii;
 	unsigned char config_id_size;
 	unsigned int device_fw_id;
 	unsigned int image_fw_id;
+	unsigned int device_config_id;
+	unsigned int image_config_id;
 	struct synaptics_rmi4_data *rmi4_data = fwu->rmi4_data;
 
 	if (fwu->force_update) {
@@ -2294,7 +2332,9 @@ static enum flash_area fwu_go_nogo(void)
 			"%s: Image firmware ID = %d\n",
 			__func__, image_fw_id);
 
-	if (image_fw_id > device_fw_id) {
+	//if (image_fw_id > device_fw_id) {
+	//<ASUS+>
+	if (image_fw_id != device_fw_id) {
 		flash_area = UI_FIRMWARE;
 		goto exit;
 	} else if (image_fw_id < device_fw_id) {
@@ -2307,6 +2347,7 @@ static enum flash_area fwu_go_nogo(void)
 
 	/* Get device config ID */
 	retval = fwu_get_device_config_id();
+	device_config_id = be_to_uint(fwu->config_id);
 	if (retval < 0) {
 		dev_err(rmi4_data->pdev->dev.parent,
 				"%s: Failed to read device config ID\n",
@@ -2314,12 +2355,42 @@ static enum flash_area fwu_go_nogo(void)
 		flash_area = NONE;
 		goto exit;
 	}
+	dev_info(rmi4_data->pdev->dev.parent,
+			"%s: Device config ID = 0x%02x 0x%02x 0x%02x 0x%02x\n",
+			__func__,
+			fwu->config_id[0],
+			fwu->config_id[1],
+			fwu->config_id[2],
+			fwu->config_id[3]);
 
+	/* Get image config ID */
+	image_config_id = be_to_uint(fwu->img.ui_config.data);
+	dev_info(rmi4_data->pdev->dev.parent,
+			"%s: Image config ID = 0x%02x 0x%02x 0x%02x 0x%02x\n",
+			__func__,
+			fwu->img.ui_config.data[0],
+			fwu->img.ui_config.data[1],
+			fwu->img.ui_config.data[2],
+			fwu->img.ui_config.data[3]);
+			
 	if (fwu->bl_version == BL_V7 || fwu->bl_version == BL_V8)
 		config_id_size = V7_CONFIG_ID_SIZE;
 	else
 		config_id_size = V5V6_CONFIG_ID_SIZE;
 
+	//<ASUS+>	if (image_config_id > device_config_id) {
+	if (image_config_id != device_config_id) {	//<ASUS+>
+		dev_info(rmi4_data->pdev->dev.parent,
+				"%s: Image config ID not same with device config ID, need update config\n",
+				__func__);
+		flash_area = UI_CONFIG;
+		goto exit;
+	}
+
+	flash_area = NONE;
+
+	//original vendor source code
+	/*
 	for (ii = 0; ii < config_id_size; ii++) {
 		if (fwu->img.ui_config.data[ii] > fwu->config_id[ii]) {
 			flash_area = UI_CONFIG;
@@ -2330,7 +2401,7 @@ static enum flash_area fwu_go_nogo(void)
 		}
 	}
 
-	flash_area = NONE;
+	flash_area = NONE;*/
 
 exit:
 	if (flash_area == NONE) {
@@ -3399,6 +3470,7 @@ exit:
 static int fwu_start_reflash(void)
 {
 	int retval = 0;
+	bool do_rebuild = false;
 	enum flash_area flash_area;
 	const struct firmware *fw_entry = NULL;
 	struct synaptics_rmi4_data *rmi4_data = fwu->rmi4_data;
@@ -3417,13 +3489,44 @@ static int fwu_start_reflash(void)
 	pr_notice("%s: Start of reflash process\n", __func__);
 
 	if (fwu->image == NULL) {
-		retval = secure_memcpy(fwu->image_name, MAX_IMAGE_NAME_LEN,
-				FW_IMAGE_NAME, sizeof(FW_IMAGE_NAME),
-				sizeof(FW_IMAGE_NAME));
-		if (retval < 0) {
-			dev_err(rmi4_data->pdev->dev.parent,
-					"%s: Failed to copy image file name\n",
+		dev_info(rmi4_data->pdev->dev.parent,
+					"%s: Project is ZE553KL\n",
 					__func__);
+		if(asus_lcd_id == 1)//EDO
+		{
+			dev_info(rmi4_data->pdev->dev.parent,
+						"%s:TP IC is synaptics s3508r,LCM is EDO!\n",
+						__func__);			
+			retval = secure_memcpy(fwu->image_name, MAX_IMAGE_NAME_LEN,
+					FW_IMAGE_NAME_ZE553KL_EDO, sizeof(FW_IMAGE_NAME_ZE553KL_EDO),
+					sizeof(FW_IMAGE_NAME_ZE553KL_EDO));
+			if (retval < 0) {
+				dev_err(rmi4_data->pdev->dev.parent,
+						"%s: Failed to copy EDO image file name\n",
+						__func__);
+				goto exit;
+			}
+		}
+		else if(asus_lcd_id == 0)//TM
+		{
+			dev_info(rmi4_data->pdev->dev.parent,
+						"%s:TP IC is synaptics s3508r,LCM is TM!\n",
+						__func__);			
+			retval = secure_memcpy(fwu->image_name, MAX_IMAGE_NAME_LEN,
+					FW_IMAGE_NAME_ZE553KL_TM, sizeof(FW_IMAGE_NAME_ZE553KL_TM),
+					sizeof(FW_IMAGE_NAME_ZE553KL_TM));
+			if (retval < 0) {
+				dev_err(rmi4_data->pdev->dev.parent,
+						"%s: Failed to copy TM image file name\n",
+						__func__);
+				goto exit;
+			}		
+		}
+		else
+		{
+			dev_err(rmi4_data->pdev->dev.parent,
+						"%s: Panel id fail\n",
+						__func__);
 			goto exit;
 		}
 		dev_dbg(rmi4_data->pdev->dev.parent,
@@ -3441,8 +3544,8 @@ static int fwu_start_reflash(void)
 		}
 
 		dev_dbg(rmi4_data->pdev->dev.parent,
-				"%s: Firmware image size = %d\n",
-				__func__, (unsigned int)fw_entry->size);
+				"%s: Firmware image size = %ld\n",
+				__func__, fw_entry->size);
 
 		fwu->image = fw_entry->data;
 	}
@@ -3497,10 +3600,12 @@ static int fwu_start_reflash(void)
 
 	switch (flash_area) {
 	case UI_FIRMWARE:
+		do_rebuild = true;
 		retval = fwu_do_reflash();
-		rmi4_data->reset_device(rmi4_data, true);
+		//rmi4_data->reset_device(rmi4_data, false);
 		break;
 	case UI_CONFIG:
+		do_rebuild = true;
 		retval = fwu_check_ui_configuration_size();
 		if (retval < 0)
 			break;
@@ -3509,15 +3614,17 @@ static int fwu_start_reflash(void)
 		if (retval < 0)
 			break;
 		retval = fwu_write_ui_configuration();
-		rmi4_data->reset_device(rmi4_data, true);
+		//rmi4_data->reset_device(rmi4_data, false);
 		break;
 	case NONE:
 	default:
-		rmi4_data->reset_device(rmi4_data, false);
+		//rmi4_data->reset_device(rmi4_data, false);
 		break;
 	}
 
 	if (retval < 0) {
+		do_rebuild = false;
+		rmi4_data->reset_device(rmi4_data, false);
 		dev_err(rmi4_data->pdev->dev.parent,
 				"%s: Failed to do reflash\n",
 				__func__);
@@ -3554,6 +3661,9 @@ static int fwu_start_reflash(void)
 exit:
 	if (fw_entry)
 		release_firmware(fw_entry);
+
+	if (do_rebuild)
+		rmi4_data->reset_device(rmi4_data, true);
 
 	pr_notice("%s: End of reflash process\n", __func__);
 
@@ -3790,24 +3900,40 @@ exit:
 	return retval;
 }
 
+
+
 int synaptics_fw_updater(const unsigned char *fw_data)
 {
 	int retval;
+	struct synaptics_rmi4_data *rmi4_data = fwu->rmi4_data;
+	mutex_lock(&(rmi4_data->rmi4_fw_mutex));
+	fw_update_state = 1;
+	dev_info(rmi4_data->pdev->dev.parent, "%s fw_update_state=%d start\n", __func__, fw_update_state);
 
-	if (!fwu)
+	if (!fwu) {
+		fw_update_state = 0;
+		dev_info(rmi4_data->pdev->dev.parent, "%s fw_update_state=%d end\n", __func__, fw_update_state);
 		return -ENODEV;
+	}
 
-	if (!fwu->initialized)
+	if (!fwu->initialized) {
+		fw_update_state = 0;
+		dev_info(rmi4_data->pdev->dev.parent, "%s fw_update_state=%d end\n", __func__, fw_update_state);
 		return -ENODEV;
+	}
 
-	if (fwu->in_ub_mode)
+	if (fwu->in_ub_mode) {
+		fw_update_state = 0;
+		dev_info(rmi4_data->pdev->dev.parent, "%s fw_update_state=%d end\n", __func__, fw_update_state);
 		return -ENODEV;
+	}
 
 	fwu->image = fw_data;
-
 	retval = fwu_start_reflash();
-
+	fw_update_state = 0;
+	dev_info(rmi4_data->pdev->dev.parent, "%s fw_update_state=%d end\n", __func__, fw_update_state);
 	fwu->image = NULL;
+	mutex_unlock(&(rmi4_data->rmi4_fw_mutex));
 
 	return retval;
 }
@@ -3856,8 +3982,8 @@ static ssize_t fwu_sysfs_show_image(struct file *data_file,
 
 	if (count < fwu->config_size) {
 		dev_err(rmi4_data->pdev->dev.parent,
-				"%s: Not enough space (%d bytes) in buffer\n",
-				__func__, (unsigned int)count);
+				"%s: Not enough space (%ld bytes) in buffer\n",
+				__func__, count);
 		return -EINVAL;
 	}
 
@@ -4436,3 +4562,4 @@ module_exit(rmi4_fw_update_module_exit);
 MODULE_AUTHOR("Synaptics, Inc.");
 MODULE_DESCRIPTION("Synaptics DSX FW Update Module");
 MODULE_LICENSE("GPL v2");
+

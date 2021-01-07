@@ -18,7 +18,11 @@
 
 #include "pmic-voter.h"
 
-#define NUM_MAX_CLIENTS	8
+#ifdef ZS550KL
+#define NUM_MAX_CLIENTS	10
+#else
+#define NUM_MAX_CLIENTS	11
+#endif
 
 struct client_vote {
 	int	state;
@@ -163,7 +167,7 @@ int vote(struct votable *votable, int client_id, bool state, int val)
 	votable->votes[client_id].state = state;
 	votable->votes[client_id].value = val;
 
-	pr_debug("%s: %d voting for %d - %s\n",
+	pr_info("%s: %d voting for %d - %s\n",
 			votable->name,
 			client_id, val, state ? "on" : "off");
 	switch (votable->type) {
@@ -191,7 +195,7 @@ int vote(struct votable *votable, int client_id, bool state, int val)
 	 * known effective_result and effective_client_id
 	 */
 	if (effective_id < 0) {
-		pr_debug("%s: no votes; skipping callback\n", votable->name);
+		pr_info("%s: no votes; skipping callback\n", votable->name);
 		goto out;
 	}
 

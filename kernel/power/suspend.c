@@ -30,6 +30,7 @@
 #include <trace/events/power.h>
 #include <linux/compiler.h>
 #include <linux/wakeup_reason.h>
+#include <linux/devfreq.h>
 
 #include "power.h"
 
@@ -40,6 +41,10 @@ static const struct platform_suspend_ops *suspend_ops;
 static const struct platform_freeze_ops *freeze_ops;
 static DECLARE_WAIT_QUEUE_HEAD(suspend_freeze_wait_head);
 static bool suspend_freeze_wake;
+
+static char governor_name[DEVFREQ_NAME_LEN] = {0};
+
+unsigned int pm_pwrcs_ret=0;//ASUS_BSP jeff_gu Add for wakeup debug
 
 void freeze_set_ops(const struct platform_freeze_ops *ops)
 {
@@ -341,6 +346,7 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 			trace_suspend_resume(TPS("machine_suspend"),
 				state, false);
 			events_check_enabled = false;
+			pm_pwrcs_ret = 1;//ASUS_BSP [Power] jeff_gu Add for wakeup debug
 		} else if (*wakeup) {
 			pm_get_active_wakeup_sources(suspend_abort,
 				MAX_SUSPEND_ABORT_LEN);
@@ -352,6 +358,12 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 
 	arch_suspend_enable_irqs();
 	BUG_ON(irqs_disabled());
+
+	error = governor_check("soc:qcom,cpubw",governor_name);
+	if(!error)
+	{
+		governor_change("soc:qcom,cpubw","performance");
+	}
 
  Enable_cpus:
 	enable_nonboot_cpus();
@@ -484,6 +496,11 @@ static int enter_state(suspend_state_t state)
 	pm_restore_gfp_mask();
 
  Finish:
+
+
+   governor_change("soc:qcom,cpubw",governor_name);
+   governor_check("soc:qcom,cpubw",governor_name);
+
 	pr_debug("PM: Finishing wakeup.\n");
 	suspend_finish();
  Unlock:
@@ -501,6 +518,12 @@ static void pm_suspend_marker(char *annotation)
 	pr_info("PM: suspend %s %d-%02d-%02d %02d:%02d:%02d.%09lu UTC\n",
 		annotation, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
 		tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec);
+	//[+++]add for suspend debug 	
+	if(annotation[1]=='n'){
+		ASUSEvtlog("[PM]request_suspend_state: (0->3)\n");}
+	else if(annotation[1]=='x'){
+		ASUSEvtlog("[PM]request_suspend_state: (3->0)\n");}	
+	//[---]add for suspend debug 
 }
 
 /**

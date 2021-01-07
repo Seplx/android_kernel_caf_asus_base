@@ -50,6 +50,18 @@
 			qcom,adc-vdd-reference = <1800>;
 			qcom,vadc-poll-eoc;
 
+			chan@10 {
+				label = "case_therm";
+				reg = <0x10>;
+				qcom,decimation = <0>;
+				qcom,pre-div-channel-scaling = <0>;
+				qcom,calibration-type = "ratiometric";
+				qcom,scale-function = <2>;
+				qcom,hw-settle-time = <2>;
+				qcom,fast-avg-setup = <0>;
+				qcom,vadc-thermal-node;
+			};
+
 			chan@0 {
 				label = "usbin";
 				reg = <0>;
@@ -152,7 +164,7 @@
 			gpio@c000 {
 				reg = <0xc000 0x100>;
 				qcom,pin-num = <1>;
-				status = "disabled";
+				status = "okay";
 			};
 
 			gpio@c100 {
@@ -174,7 +186,12 @@
 			mpp@a000 {
 				reg = <0xa000 0x100>;
 				qcom,pin-num = <1>;
-				status = "disabled";
+				/* MPP1 - case_therm config */
+				qcom,mode = <4>; /* AIN input */
+				qcom,invert = <1>; /* Enable MPP */
+				qcom,ain-route = <0>; /* AMUX 5 */
+				qcom,master-en = <1>;
+				qcom,src-sel = <0>; /* Function constant */
 			};
 
 			mpp@a100 {
@@ -317,16 +334,19 @@
 			compatible = "qcom,qpnp-fg";
 			#address-cells = <1>;
 			#size-cells = <1>;
-			qcom,resume-soc = <95>;
+			qcom,resume-soc = <99>;
 			status = "okay";
 			qcom,bcl-lm-threshold-ma = <127>;
 			qcom,bcl-mh-threshold-ma = <405>;
 			qcom,fg-iterm-ma = <150>;
 			qcom,fg-chg-iterm-ma = <100>;
 			qcom,pmic-revid = <&pmi8950_revid>;
-			qcom,fg-cutoff-voltage-mv = <3500>;
+			qcom,fg-cutoff-voltage-mv = <3400>;
 			qcom,cycle-counter-en;
 			qcom,capacity-learning-on;
+			qcom,ext-sense-type;
+			qcom,hold-soc-while-full;
+			qcom,vbat-estimate-diff-mv = <250>;
 
 			qcom,fg-soc@4000 {
 			status = "okay";
@@ -406,9 +426,46 @@
 		};
 
 		qcom,leds@a100 {
+			status = "okay";
 			compatible = "qcom,leds-qpnp";
 			reg = <0xa100 0x100>;
 			label = "mpp";
+			qcom,led_mpp_2{
+				label = "mpp";
+				linux,name = "red";
+				linux,default-trigger = "none";
+				qcom,default-state = "off";
+				qcom,max-current = <40>;
+				qcom,current-setting = <5>;
+				qcom,id = <6>;
+				qcom,mode = "pwm";
+				qcom,source-sel = <8>;
+				qcom,mode-ctrl = <0x60>;
+				qcom,vin-ctrl=<3>;
+				pwms = <&pmi8950_pwm 0 0>;
+				qcom,pwm-us = <100>; //setup 0.0001s 
+			};
+		};
+		qcom,leds@a300 {
+			status = "okay";
+			compatible = "qcom,leds-qpnp";
+			reg = <0xa300 0x100>;
+			label = "mpp";
+			qcom,led_mpp_2{
+				label = "mpp";
+				linux,name = "green";
+				linux,default-trigger = "none";
+				qcom,default-state = "off";
+				qcom,max-current = <40>;
+				qcom,current-setting = <5>;
+				qcom,id = <6>;
+				qcom,mode = "pwm";
+				qcom,source-sel = <8>;
+				qcom,mode-ctrl = <0x60>;
+				qcom,vin-ctrl=<3>;
+				pwms = <&pmi8950_pwm 0 0>;
+				qcom,pwm-us = <100>; //setup 0.0001s 
+			};
 		};
 	};
 
@@ -419,7 +476,7 @@
 		#size-cells = <1>;
 
 		pmi8950_pwm: pwm@b000 {
-			status = "disabled";
+			status = "okay";
 			compatible = "qcom,qpnp-pwm";
 			reg = <0xb000 0x100>;
 			reg-names = "qpnp-lpg-channel-base";
@@ -527,10 +584,12 @@
 			qcom,dim-method = "linear";
 			qcom,hyb-thres = <625>;
 			qcom,sync-dly-us = <800>;
-			qcom,fs-curr-ua = <20000>;
+			qcom,fs-curr-ua = <22500>;
+			qcom,en-phase-stag;
+			qcom,ibb-pwrup-dly = <8>;
 			qcom,led-strings-list = [00 01];
-			qcom,en-ext-pfet-sc-pro;
-			qcom,cons-sync-write-delay-us = <1000>;
+			//qcom,en-ext-pfet-sc-pro;
+			qcom,en-cabc;
 		};
 
 		flash_led: qcom,leds@d300 {

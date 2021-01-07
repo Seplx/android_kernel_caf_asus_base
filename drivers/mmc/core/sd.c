@@ -1100,7 +1100,9 @@ static int mmc_sd_init_card(struct mmc_host *host, u32 ocr,
 
 	card->clk_scaling_highest = mmc_sd_get_max_clock(card);
 	card->clk_scaling_lowest = host->f_min;
-
+	//<ASUS_BSP +++ Hank2_Liu 20170302> Add sd_status Node for ATD ++++++
+	host->sd_status = 1;
+	//<ASUS_BSP +++ Hank2_Liu 20170302> Add sd_status Node for ATD ------
 	return 0;
 
 free_card:
@@ -1125,6 +1127,9 @@ static void mmc_sd_remove(struct mmc_host *host)
 
 	mmc_claim_host(host);
 	host->card = NULL;
+	//<ASUS_BSP +++ Hank2_Liu 20170302> Add sd_status Node for ATD ++++++
+	host->sd_status = 0;
+	//<ASUS_BSP +++ Hank2_Liu 20170302> Add sd_status Node for ATD ------
 	mmc_release_host(host);
 }
 

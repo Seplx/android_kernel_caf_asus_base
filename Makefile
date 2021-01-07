@@ -779,6 +779,18 @@ ifeq ($(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-goto.sh $(CC)), y)
 	KBUILD_CFLAGS += -DCC_HAVE_ASM_GOTO
 endif
 
+#<ASUS-stone1 wang 20170222>support fac_printklog +++++
+ifeq ($(FACTORY),1)
+		KBUILD_CFLAGS += -DASUS_FACTORY_BUILD
+endif
+#<ASUS-stone1 wang 20170222>support fac_printklog -----
+
+ifneq ($(BUILD_NUMBER),)
+        KBUILD_CPPFLAGS += -DASUS_SW_VER=\"$(BUILD_NUMBER)\"
+else
+        KBUILD_CPPFLAGS += -DASUS_SW_VER=\"$(ASUS_BUILD_PROJECT)_ENG\"
+endif
+
 include $(srctree)/scripts/Makefile.kasan
 include $(srctree)/scripts/Makefile.extrawarn
 include $(srctree)/scripts/Makefile.ubsan
@@ -787,6 +799,23 @@ include $(srctree)/scripts/Makefile.ubsan
 KBUILD_CPPFLAGS += $(KCPPFLAGS)
 KBUILD_AFLAGS += $(KAFLAGS)
 KBUILD_CFLAGS += $(KCFLAGS)
+ifneq ($(ASUS_FACTORY_BUILD),)
+KBUILD_CPPFLAGS += -DASUS_FACTORY_BUILD=1
+endif
+ifeq ($(TARGET_PRODUCT), Z01M)
+KBUILD_CPPFLAGS += -DZD552KL_PHOENIX=1
+endif
+ifeq ($(TARGET_PRODUCT), Z018)
+KBUILD_CPPFLAGS += -DZS550KL=1
+endif
+ifeq ($(TARGET_PRODUCT), Z01H)
+KBUILD_CPPFLAGS += -DZE553KL=1
+endif
+# jackson : add ASUS_SHIP_BUILD define for user build +++
+ifeq ($(TARGET_BUILD_VARIANT), user)
+KBUILD_CPPFLAGS += -DASUS_SHIP_BUILD=1
+endif
+# jackson : add ASUS_SHIP_BUILD define for user build ---
 
 # Use --build-id when available.
 LDFLAGS_BUILD_ID = $(patsubst -Wl$(comma)%,%,\
@@ -796,6 +825,10 @@ LDFLAGS_vmlinux += $(LDFLAGS_BUILD_ID)
 
 ifeq ($(CONFIG_STRIP_ASM_SYMS),y)
 LDFLAGS_vmlinux	+= $(call ld-option, -X,)
+endif
+
+ifeq ($(TARGET_SKU),CN)
+		KBUILD_CFLAGS += -DASUS_SKU_CN
 endif
 
 LDFLAGS_vmlinux += $(call ld-option, --fix-cortex-a53-843419)

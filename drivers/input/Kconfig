@@ -23,6 +23,13 @@ config INPUT
 	  To compile this driver as a module, choose M here: the
 	  module will be called input.
 
+config SENSORS_HALL
+	bool "Hall sensor"
+	default y
+	---help---
+	 Say y here if you want to use this hall sensor driver, it
+	 is like a switch. For example, lid.
+
 if INPUT
 
 config INPUT_FF_MEMLESS

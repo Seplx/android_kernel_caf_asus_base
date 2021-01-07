@@ -131,7 +131,14 @@ EXPORT_SYMBOL_GPL(suspend_device_irqs);
 static void resume_irq(struct irq_desc *desc, int irq)
 {
 	irqd_clear(&desc->irq_data, IRQD_WAKEUP_ARMED);
-
+//<BSP_Hank2_Liu-20170428>Find Wakeup Sources When System Resume +++
+	if (desc->istate & IRQS_PENDING) { 
+        printk(KERN_ERR "Wakeup from IRQ %d %s\n", 
+        irq, 
+        desc->action && desc->action->name ? 
+        desc->action->name : ""); 
+    } 
+//<BSP_Hank2_Liu-20170428>Find Wakeup Sources When System Resume ---
 	if (desc->istate & IRQS_SUSPENDED)
 		goto resume;
 

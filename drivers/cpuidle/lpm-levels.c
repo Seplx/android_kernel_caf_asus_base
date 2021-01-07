@@ -663,8 +663,9 @@ static int cluster_configure(struct lpm_cluster *cluster, int idx,
 			goto failed_set_mode;
 		}
 
-		us = us + 1;
-		do_div(us, USEC_PER_SEC/SCLK_HZ);
+		us = (us + 1) * 1000;
+		do_div(us, NSEC_PER_SEC/SCLK_HZ);
+
 		msm_mpm_enter_sleep(us, from_idle, cpumask);
 
 		if (cluster->no_saw_devices && !use_psci)
@@ -1269,6 +1270,7 @@ static int lpm_suspend_enter(suspend_state_t state)
 	struct lpm_cpu *lpm_cpu = cluster->cpu;
 	const struct cpumask *cpumask = get_cpu_mask(cpu);
 	int idx;
+	int64_t time = ktime_to_ns(ktime_get_raw());
 
 	for (idx = lpm_cpu->nlevels - 1; idx >= 0; idx--) {
 
@@ -1280,7 +1282,7 @@ static int lpm_suspend_enter(suspend_state_t state)
 		return 0;
 	}
 	cpu_prepare(cluster, idx, false);
-	cluster_prepare(cluster, cpumask, idx, false, 0);
+	cluster_prepare(cluster, cpumask, idx, false, time);
 	if (idx > 0)
 		update_debug_pc_event(CPU_ENTER, idx, 0xdeaffeed,
 					0xdeaffeed, false);

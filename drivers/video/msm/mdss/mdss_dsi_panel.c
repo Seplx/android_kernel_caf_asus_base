@@ -20,19 +20,664 @@
 #include <linux/slab.h>
 #include <linux/leds.h>
 #include <linux/qpnp/pwm.h>
+#include <linux/proc_fs.h>
 #include <linux/err.h>
 #include <linux/string.h>
+#include <linux/msm_mdp.h>
+
 
 #include "mdss_dsi.h"
 #include "mdss_dba_utils.h"
+#include "../../../input/touchscreen/synaptics_dsx/synaptics_dsx_core.h"
 
 #define DT_CMD_HDR 6
 #define MIN_REFRESH_RATE 48
 #define DEFAULT_MDP_TRANSFER_TIME 14000
+#define WLED_MAX_LEVEL_ENABLE 4095
+#define WLED_MIN_LEVEL_DISABLE 0
+#define TD4300_BL_THRESHOLD 180
+#define TM_TD4300_BL_THRESHOLD 180
 
 #define VSYNC_DELAY msecs_to_jiffies(17)
 
+struct mdss_panel_data *gdata;
+static struct proc_dir_entry *lcd_uniqueID_proc_file;
+static struct proc_dir_entry *lcd_ID_proc_file;
+static void display_func(struct work_struct *);
+static DECLARE_DELAYED_WORK(display_work, display_func);
+static struct workqueue_struct *display_workqueue;
+
+//<ASUS BSP Robert_He 20170419>add hbm mode In kernel++++++
+#ifdef ZD552KL_PHOENIX
+static struct proc_dir_entry *panel_hbm_mode_phoenix_proc_file;
+short phoenix_alpm_mode = 0;
+EXPORT_SYMBOL(phoenix_alpm_mode);
+void set_phoenix_alpm_cmd(short alpm_mode);//asus alpm mode
+static struct proc_dir_entry *panel_alpm_mode_phoenix_proc_file;//asus alpm mode
+extern bool panel_resume_on;  //print backlight log when resume
+bool already_alpm_mode = false;
+extern bool disable_cap_off; //disable capsensor when panel brightness is 0
+static char alwayson_mode_page[2] = {0xFE, 0x70};  /* DTYPE_DCS_WRITE1 */
+static char alwayson_mode_page_back[2] = {0xFE, 0x00};
+
+static char get_alwayson_cmd[2] = {0x0A,0};
+static struct dsi_cmd_desc get_tm_alwayson_mode_cmd[] = {
+       {{DTYPE_DCS_WRITE1, 0, 0, 0, 0, sizeof(alwayson_mode_page)}, alwayson_mode_page},
+       {{DTYPE_DCS_READ, 1, 0, 0, 0, sizeof(get_alwayson_cmd)}, get_alwayson_cmd},
+       {{DTYPE_DCS_WRITE1, 0, 0, 0, 0, sizeof(alwayson_mode_page_back)}, alwayson_mode_page_back},
+};
+void tm_read_alwayson_mode(char *rbuf)
+{
+    struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+    struct dcs_cmd_req cmdreq;
+
+    ctrl_pdata = container_of(gdata, struct mdss_dsi_ctrl_pdata,
+                panel_data);
+
+    memset(&cmdreq, 0, sizeof(cmdreq));
+
+    cmdreq.cmds = &get_tm_alwayson_mode_cmd[1];
+    cmdreq.cmds_cnt = 1;
+    cmdreq.flags = CMD_REQ_COMMIT | CMD_REQ_RX;
+    cmdreq.rlen = 1;
+    cmdreq.rbuf = rbuf;
+    cmdreq.cb = NULL;
+
+    mdss_dsi_cmdlist_put(ctrl_pdata, &cmdreq);
+    pr_info("%s rbuf:%x\n",__func__,rbuf[0]);
+}
+EXPORT_SYMBOL(tm_read_alwayson_mode);
+struct dsi_panel_cmds tm_51pulse_cmds;
+EXPORT_SYMBOL(tm_51pulse_cmds);
+#endif
+//<ASUS BSP Robert_He 20170419>add hbm mode In kernel------
+
+#ifdef ZE553KL
+#define EDO_PANEL 1
+static struct proc_dir_entry *panel_hbm_mode_proc_file;//asus hbm mode
+#endif
+static DEFINE_SPINLOCK(bklt_lock);
+static bool g_timer = false;
+void set_tcon_cmd(char *cmd, short len);
+
+extern char lcd_unique_id[64];
+extern int asus_lcd_id;
+extern int dclick_mode;
+extern int asus_rmi4_suspend(void);
+extern int asus_rmi4_resume(void);
+//<ASUS BSP Hank2_Liu 20160628>Dyanmic calibration backlight In kernel++++++  
+#include <linux/syscalls.h>
+#include <linux/proc_fs.h>
+#include <linux/file.h>
+#include <linux/uaccess.h>
+#define BL_DEFAULT 660
+#define LCD_CALIBRATION_PATH "/factory/lcd_calibration.ini"
+#define BL_CALIBRATION_PATH "/data/data/bl_adjust"
+#define SHIFT_MASK 23
+
+#define ON "on"
+uint8_t g_lcd_uniqueId_crc = -1;
+int g_asus_lcdID_verify = 0;
+int g_calibrated_bl = -1;
+int g_actual_bl = -1;
+int g_adjust_bl = 0;
+extern struct synaptics_rmi4_data *asus_rmi4_data;
+
+static mm_segment_t oldfs;
+//<ASUS BSP Hank2_Liu 20160628>Dyanmic calibration backlight In kernel------
+
+//asus bsp brightness pwm pulse+++
+#define TM_PANEL 0
+static int tm_bkl_level_prev = 255;
+struct dsi_panel_cmds tm_bkl_pwm_4pulse_cmds;
+struct dsi_panel_cmds tm_bkl_pwm_6pulse_cmds;
+//asus bsp brightness pwm pulse---
+
+//<ASUS BSP Hank2_Liu 20160517> set CABC mode:default is still mode & OFF mode for factory image ++++++  
+#define PANEL_CABC_MASK	0x3
+static struct mutex cmd_mutex;
+static struct mutex bl_cmd_mutex;
+static int g_last_bl = 0x0;
+static int g_bl_threshold;
+static int g_wled_dimming_div;
+static bool bl_wled_enable = false;
+bool cabc_first_boot = true;
+EXPORT_SYMBOL(cabc_first_boot);
+static int g_previous_bl = 0x0;
+
+//static char ctrl_display[2] = {0x53, 0x2C};
+char bl_cmd[2] = {0x51, 0x64};
+char dimming_cmd[2] = {0x53, 0x2C};
+char cabc_dim_off_cmd[2] = {0xCE, 0x00};
+char cabc_dim_on_cmd[2] = {0xCE, 0x50};
+
+#ifndef ASUS_FACTORY_BUILD
+static char cabc_mode[2] = {0x55, 0x82};
+#else
+static char cabc_mode[2] = {0x55, OFF_MODE};
+#endif
+
+void set_tcon_cmd(char *cmd, short len)
+{
+    struct dcs_cmd_req cmdreq;
+    struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+    struct dsi_cmd_desc tcon_cmd = {
+        {DTYPE_DCS_WRITE1, 1, 0, 0, 1, len}, cmd};
+
+    if(len > 2)
+        tcon_cmd.dchdr.dtype = DTYPE_GEN_LWRITE;
+
+    ctrl_pdata = container_of(gdata, struct mdss_dsi_ctrl_pdata,
+                panel_data);
+
+    mutex_lock(&cmd_mutex);
+
+    if (gdata->panel_info.panel_power_state == MDSS_PANEL_POWER_ON) {
+        pr_info("[Display] write parameter: 0x%02x = 0x%02x\n", cmd[0], cmd[1]);
+        memset(&cmdreq, 0, sizeof(cmdreq));
+        cmdreq.cmds = &tcon_cmd;
+        cmdreq.cmds_cnt = 1;
+        cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL;
+        cmdreq.rlen = 0;
+        cmdreq.cb = NULL;
+        mdss_dsi_cmdlist_put(ctrl_pdata, &cmdreq);
+    } else {
+        pr_err("[Display] write parameter failed\n");
+    }
+    mutex_unlock(&cmd_mutex);
+}
+EXPORT_SYMBOL(set_tcon_cmd);
+
+static char read_cabc_mode[1] = {0x56};
+static struct dsi_cmd_desc read_cabc_cmd[] = {
+		{{DTYPE_DCS_READ,1,0,0,0,1},read_cabc_mode},
+};
+
+void read_tcon_cabc(char *rbuf)
+{
+	struct dcs_cmd_req cmdreq;
+    struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+
+	ctrl_pdata = container_of(gdata, struct mdss_dsi_ctrl_pdata,
+                panel_data);
+
+    mutex_lock(&cmd_mutex);
+
+    memset(&cmdreq, 0, sizeof(cmdreq));
+    cmdreq.cmds = read_cabc_cmd;
+	cmdreq.cmds_cnt = 1;
+    cmdreq.flags = CMD_REQ_RX | CMD_REQ_COMMIT;
+    cmdreq.rlen = 1;
+	cmdreq.rbuf = rbuf;
+    cmdreq.cb = NULL;
+    mdss_dsi_cmdlist_put(ctrl_pdata, &cmdreq);
+
+    mutex_unlock(&cmd_mutex);
+}
+EXPORT_SYMBOL(read_tcon_cabc);
+
+
+//<ASUS BSP Hank2_Liu 20160517> set CABC mode:default is still mode & OFF mode for factory image ------
+
+
 DEFINE_LED_TRIGGER(bl_led_trigger);
+
+//<ASUS-Hank2_Liu-2016/04/27> Read Unique ID Information ++++++
+static int lcd_ID_proc_read(struct seq_file *buf, void *v)
+{
+       seq_printf(buf, "%d\n", asus_lcd_id);
+       return 0;
+}
+
+static int lcd_uniqueID_proc_read(struct seq_file *buf, void *v)
+{
+       seq_printf(buf, "%s\n", lcd_unique_id);
+       return 0;
+}
+
+static int lcd_ID_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, lcd_ID_proc_read, NULL);
+}
+
+static int lcd_uniqueID_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, lcd_uniqueID_proc_read, NULL);
+}
+
+static ssize_t cabc_mode_switch_proc_write(struct file *filp, const char *buff, size_t len, loff_t *off)
+{
+    char messages[256];
+
+    memset(messages, 0, sizeof(messages));
+
+    if (len > 256)
+        len = 256;
+    if (copy_from_user(messages, buff, len))
+        return -EFAULT;
+
+       if(strncmp(messages, "0", 1) == 0)  //off
+        cabc_mode[1] = 0x0;
+       else if(strncmp(messages, "1", 1) == 0) //ui
+        cabc_mode[1] = 0x1;
+       else if(strncmp(messages, "2", 1) == 0) //still
+        cabc_mode[1] = 0x82;
+    else if(strncmp(messages, "3", 1) == 0) //moving
+        cabc_mode[1] = 0x3;
+
+   set_tcon_cmd(cabc_mode, ARRAY_SIZE(cabc_mode));
+
+    return len;
+}
+
+
+static int cabc_mode_switch_proc_read(struct seq_file *buf, void *v)
+{
+               char temp[2] = {0};
+               read_tcon_cabc(&temp[0]);
+               seq_printf(buf, "%x\n", temp[0]);
+               return 0;
+}
+
+static int cabc_mode_switch_proc_open(struct inode *inode, struct file *file)
+{
+       return single_open(file,cabc_mode_switch_proc_read,NULL);
+}
+
+
+static struct file_operations cabc_mode_switch_proc_ops = {
+       .open = cabc_mode_switch_proc_open,
+       .read = seq_read,
+       .write = cabc_mode_switch_proc_write,
+       .release = single_release,
+};
+static struct file_operations lcd_ID_proc_ops = {
+       .open = lcd_ID_proc_open,
+       .read = seq_read,
+       .release = single_release,
+};
+
+static struct file_operations lcd_uniqueID_proc_ops = {
+       .open = lcd_uniqueID_proc_open,
+       .read = seq_read,
+       .release = single_release,
+};
+
+static struct proc_dir_entry *cabc_mode_switch;
+static void create_cabc_mode_switch_file(void)
+{
+       printk("[DISPLAY] : create_cabc_mode_switch_file\n");
+       cabc_mode_switch = proc_create("cabc_mode_switch",0777,NULL,&cabc_mode_switch_proc_ops);
+       if(cabc_mode_switch){
+        printk("[DISPLAY] : create_cabc_mode_switch_file sucessed!\n");
+    }else{
+               printk("[DISPLAY] : create create_cabc_mode_switch_file failed!\n");
+    }
+}
+
+static void create_lcd_ID_proc_file(void)
+{
+    lcd_ID_proc_file = proc_create("lcd_id", 0444,NULL, &lcd_ID_proc_ops);
+    if(lcd_ID_proc_file){
+        pr_info("create lcd_ID_proc_file sucessed!\n");
+    }else{
+               pr_info("create lcd_ID_proc_file failed!\n");
+    }
+}
+
+static void create_lcd_uniqueID_proc_file(void)
+{
+    lcd_uniqueID_proc_file = proc_create("lcd_unique_id", 0444,NULL, &lcd_uniqueID_proc_ops);
+    if(lcd_uniqueID_proc_file){
+        pr_info("create lcd_uniqueID_proc_file sucessed!\n");
+    }else{
+               pr_info("create lcd_uniqueID_proc_file failed!\n");
+    }
+}
+//<ASUS-Hank2_Liu-2016/04/27> Read Unique ID Information ------
+
+
+#ifdef ZE553KL
+
+/*asus hbm mode+++*/
+static short hbm_mode = 0;
+static int bkl_level_hbm = 255;
+static char hbm_mode_page0[2] = {0xFE, 0x00};  /* DTYPE_DCS_WRITE1 */
+static char hbm_mode_bkl[2] = {0x51, 0xFF};    /* DTYPE_DCS_WRITE1 */
+static char hbm_mode_page4[2] = {0xFE, 0x04};  /* DTYPE_DCS_WRITE1 */
+static char set_edo_hbm_mode[2] = {0x41, 0xCA}; /* DTYPE_DCS_WRITE1 */
+static struct dsi_cmd_desc set_edo_hbm_mode_on_cmd[] = {
+       {{DTYPE_DCS_WRITE1, 0, 0, 0, 0, sizeof(hbm_mode_page0)}, hbm_mode_page0},
+       {{DTYPE_DCS_WRITE1, 0, 0, 0, 0, sizeof(hbm_mode_bkl)}, hbm_mode_bkl},
+       {{DTYPE_DCS_WRITE1, 0, 0, 0, 0, sizeof(hbm_mode_page4)}, hbm_mode_page4},
+       {{DTYPE_DCS_WRITE1, 0, 0, 0, 0, sizeof(set_edo_hbm_mode)}, set_edo_hbm_mode},
+       {{DTYPE_DCS_WRITE1, 1, 0, 0, 0, sizeof(hbm_mode_page0)}, hbm_mode_page0},
+};
+static struct dsi_cmd_desc set_edo_hbm_mode_off_cmd[] = {
+       {{DTYPE_DCS_WRITE1, 0, 0, 0, 0, sizeof(hbm_mode_page4)}, hbm_mode_page4},
+       {{DTYPE_DCS_WRITE1, 0, 0, 0, 0, sizeof(set_edo_hbm_mode)}, set_edo_hbm_mode},
+       {{DTYPE_DCS_WRITE1, 0, 0, 0, 0, sizeof(hbm_mode_page0)}, hbm_mode_page0},
+       {{DTYPE_DCS_WRITE1, 1, 0, 0, 0, sizeof(hbm_mode_bkl)}, hbm_mode_bkl},
+};
+
+static char set_tm_hbm_mode[2] = {0x53, 0x0};
+static struct dsi_cmd_desc set_tm_hbm_mode_cmd = {
+    {DTYPE_DCS_WRITE1, 1, 0, 0, 0, sizeof(set_tm_hbm_mode)}, set_tm_hbm_mode
+};
+static char get_tm_hbm_mode[2] = {0x54, 0x0};   /* DTYPE_DCS_WRITE1 */
+static struct dsi_cmd_desc get_tm_hbm_mode_cmd = {
+    {DTYPE_DCS_READ, 1, 0, 0, 0, sizeof(get_tm_hbm_mode)}, get_tm_hbm_mode
+};
+
+void tm_read_hbm_mode(char *rbuf)
+{
+    struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+    struct dcs_cmd_req cmdreq;
+
+    ctrl_pdata = container_of(gdata, struct mdss_dsi_ctrl_pdata,
+                panel_data);
+
+    memset(&cmdreq, 0, sizeof(cmdreq));
+
+    cmdreq.cmds = &get_tm_hbm_mode_cmd;
+    cmdreq.cmds_cnt = 1;
+    cmdreq.flags = CMD_REQ_RX | CMD_REQ_COMMIT;
+    cmdreq.rlen = 1;
+    cmdreq.rbuf = rbuf;
+    cmdreq.cb = NULL;
+
+    mdss_dsi_cmdlist_put(ctrl_pdata, &cmdreq);
+    pr_info("%s rbuf:%x\n",__func__,rbuf[0]);
+}
+static ssize_t hbm_mode_proc_write(struct file *filp, const char *buff, size_t len, loff_t *off)
+{
+    char messages;
+    struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+    struct dcs_cmd_req cmdreq;
+
+    if (len < 0)
+        return -1;
+
+    if (copy_from_user(&messages, buff, 1))
+        return -EFAULT;
+
+    ctrl_pdata = container_of(gdata, struct mdss_dsi_ctrl_pdata,
+                panel_data);
+
+    memset(&cmdreq, 0, sizeof(cmdreq));
+
+    if(((messages-0x30) == 1)&&(hbm_mode != 1)){//turn on hbm mode when hbm mode is off
+
+            pr_info("%s turn on hbm mode\n",__func__);
+            if(EDO_PANEL == asus_lcd_id){
+                hbm_mode_bkl[1]=0xFF;
+                set_edo_hbm_mode[1]=0xCA;
+                cmdreq.cmds = set_edo_hbm_mode_on_cmd;
+                cmdreq.cmds_cnt = 5;
+            }else{
+                set_tm_hbm_mode[1] = 0xE0;
+                cmdreq.cmds = &set_tm_hbm_mode_cmd;
+                cmdreq.cmds_cnt = 1;
+            }
+            hbm_mode = 1;
+
+    }else if(((messages-0x30) == 0)&&(hbm_mode != 0)){//turn off hbm mode when hbm mode is on
+
+            pr_info("%s turn off hbm mode bkl_level_hbm:%d\n",__func__,bkl_level_hbm);
+            if(EDO_PANEL == asus_lcd_id){
+                hbm_mode_bkl[1]=(unsigned char)bkl_level_hbm;
+                set_edo_hbm_mode[1]=0xE0;
+                cmdreq.cmds = set_edo_hbm_mode_off_cmd;
+                cmdreq.cmds_cnt = 4;
+            }else{
+                set_tm_hbm_mode[1] = 0x20;
+                cmdreq.cmds = &set_tm_hbm_mode_cmd;
+                cmdreq.cmds_cnt = 1;
+            }
+            hbm_mode = 0;
+
+    }else if(((messages-0x30) != 1) && ((messages-0x30) != 0)){
+        pr_err("%s error num:%d messages:%c\n",__func__,(messages-0x30),messages);
+        return -1;
+    }else{
+        //pr_err("%s already set to:%d\n",__func__,hbm_mode);
+        return len;
+    }
+
+    cmdreq.flags = CMD_REQ_COMMIT;
+    cmdreq.rlen = 0;
+    cmdreq.cb = NULL;
+    mdss_dsi_cmdlist_put(ctrl_pdata, &cmdreq);
+    return len;
+}
+
+
+static int hbm_mode_proc_read(struct seq_file *buf, void *v)
+{
+    char hbm_reg;
+
+    if(TM_PANEL == asus_lcd_id){
+        tm_read_hbm_mode(&hbm_reg);
+        hbm_mode = ((hbm_reg & 0xC0) == 0xC0);
+    }
+    seq_printf(buf, "%x\n", hbm_mode);
+    return 0;
+}
+
+static int hbm_mode_proc_open(struct inode *inode, struct file *file)
+{
+    return single_open(file,hbm_mode_proc_read,NULL);
+}
+
+
+
+static struct file_operations panel_hbm_mode_proc_ops = {
+    .open = hbm_mode_proc_open,
+    .read = seq_read,
+    .write = hbm_mode_proc_write,
+    .release = single_release,
+};
+
+static void create_panel_hbm_mode_proc_file(void)
+{
+    panel_hbm_mode_proc_file = proc_create("hbm_mode", 0666,NULL, &panel_hbm_mode_proc_ops);
+    if(panel_hbm_mode_proc_file){
+        pr_info("create panel_hbm_mode_proc_file sucessed!\n");
+    }else{
+        pr_err("create panel_hbm_mode_proc_file failed!\n");
+    }
+}
+/*asus hbm mode---*/
+
+#endif
+
+//<ASUS BSP Robert_He 20170419>add hbm mode In kernel++++++
+#ifdef ZD552KL_PHOENIX
+static short phoenix_hbm_mode = 0;
+static int phoenix_bkl_level_hbm = 255;
+static char set_phoenix_tm_hbm_mode[2] = {0x53,0x0};
+static struct dsi_cmd_desc set_phoenix_tm_hbm_mode_cmd = {
+    {DTYPE_DCS_WRITE1, 1, 0, 0, 0, sizeof(set_phoenix_tm_hbm_mode)}, set_phoenix_tm_hbm_mode
+};
+static char get_phoenix_tm_hbm_mode[2] = {0x54, 0x0};   /* DTYPE_DCS_WRITE1 */
+static struct dsi_cmd_desc get_phoenix_tm_hbm_mode_cmd = {
+    {DTYPE_DCS_READ, 1, 0, 0, 0, sizeof(get_phoenix_tm_hbm_mode)}, get_phoenix_tm_hbm_mode
+};
+
+void phoenix_tm_read_hbm_mode(char *rbuf)
+{
+    struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+    struct dcs_cmd_req cmdreq;
+
+    ctrl_pdata = container_of(gdata, struct mdss_dsi_ctrl_pdata,
+                panel_data);
+
+    memset(&cmdreq, 0, sizeof(cmdreq));
+
+    cmdreq.cmds = &get_phoenix_tm_hbm_mode_cmd;
+    cmdreq.cmds_cnt = 1;
+    cmdreq.flags = CMD_REQ_RX | CMD_REQ_COMMIT;
+    cmdreq.rlen = 1;
+    cmdreq.rbuf = rbuf;
+    cmdreq.cb = NULL;
+
+    mdss_dsi_cmdlist_put(ctrl_pdata, &cmdreq);
+    pr_info("%s rbuf:%x\n",__func__,rbuf[0]);
+}
+static ssize_t phoenix_hbm_mode_proc_write(struct file *filp, const char *buff, size_t len, loff_t *off)
+{
+    char messages;
+    struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+    struct dcs_cmd_req cmdreq;
+
+    if (len < 0)
+        return -1;
+
+    if (copy_from_user(&messages, buff, 1))
+        return -EFAULT;
+
+    ctrl_pdata = container_of(gdata, struct mdss_dsi_ctrl_pdata,
+                panel_data);
+
+    memset(&cmdreq, 0, sizeof(cmdreq));
+
+    if(((messages-0x30) == 1)&&(phoenix_hbm_mode != 1)){//turn on hbm mode when hbm mode is off
+
+            pr_info("%s turn on hbm mode\n",__func__);
+
+            set_phoenix_tm_hbm_mode[1] = 0xE0;
+            cmdreq.cmds = &set_phoenix_tm_hbm_mode_cmd;
+            cmdreq.cmds_cnt = 1;
+            phoenix_hbm_mode = 1;
+
+    }else if(((messages-0x30) == 0)&&(phoenix_hbm_mode != 0)){//turn off hbm mode when hbm mode is on
+
+            pr_info("%s turn off hbm mode bkl_level_hbm:%d\n",__func__,phoenix_bkl_level_hbm);
+                set_phoenix_tm_hbm_mode[1] = 0x20;
+                cmdreq.cmds = &set_phoenix_tm_hbm_mode_cmd;
+                cmdreq.cmds_cnt = 1;
+            phoenix_hbm_mode = 0;
+
+    }else if(((messages-0x30) != 1) && ((messages-0x30) != 0)){
+        pr_err("%s error num:%d messages:%c\n",__func__,(messages-0x30),messages);
+        return -1;
+    }else{
+        //pr_err("%s already set to:%d\n",__func__,hbm_mode);
+        return len;
+    }
+
+    cmdreq.flags = CMD_REQ_COMMIT;
+    cmdreq.rlen = 0;
+    cmdreq.cb = NULL;
+    mdss_dsi_cmdlist_put(ctrl_pdata, &cmdreq);
+    return len;
+}
+
+
+static int phoenix_hbm_mode_proc_read(struct seq_file *buf, void *v)
+{
+    char hbm_reg;
+//<ASUS BSP Robert_He 201704509>disable hbm_mode when enter alpm In kernel++++++
+	if (!already_alpm_mode)
+	{
+	    phoenix_tm_read_hbm_mode(&hbm_reg);
+	    phoenix_hbm_mode = ((hbm_reg & 0xC0) == 0xC0);
+	    seq_printf(buf, "%x\n", phoenix_hbm_mode);
+	}
+	else
+	{
+		seq_printf(buf, "2\n");
+	}
+//<ASUS BSP Robert_He 201704509>disable hbm_mode when enter alpm In kernel------
+
+    return 0;
+}
+
+static int phoenix_hbm_mode_proc_open(struct inode *inode, struct file *file)
+{
+    return single_open(file,phoenix_hbm_mode_proc_read,NULL);
+}
+
+
+
+static struct file_operations panel_hbm_mode_phoenix_proc_ops = {
+    .open = phoenix_hbm_mode_proc_open,
+    .read = seq_read,
+    .write = phoenix_hbm_mode_proc_write,
+    .release = single_release,
+};
+
+static void create_panel_hbm_mode_phoenix_proc_file(void)
+{
+    panel_hbm_mode_phoenix_proc_file = proc_create("hbm_mode", 0666,NULL, &panel_hbm_mode_phoenix_proc_ops);
+    if(panel_hbm_mode_phoenix_proc_file){
+        pr_info("create panel_hbm_mode_proc_file sucessed!\n");
+    }else{
+        pr_err("create panel_hbm_mode_proc_file failed!\n");
+    }
+}
+
+struct dsi_panel_cmds phoenix_alpm_on_5nits_cmds;//for tm panel
+struct dsi_panel_cmds phoenix_alpm_on_40nits_cmds;//for tm panel
+struct dsi_panel_cmds phoenix_alpm_off_cmds;
+
+/*asus alpm mode+++*/
+static ssize_t phoenix_alpm_mode_proc_write(struct file *filp, const char *buff, size_t len, loff_t *off)
+{
+    char messages;
+
+     if (len < 0)
+		return len;
+
+    if (copy_from_user(&messages, buff, 1))
+        return -EFAULT;
+
+    if(messages > '4' || messages < '0'){
+		pr_err("%s alpm_mode number wrong:%c\n",__func__,messages);
+		return -1;
+    }
+
+    phoenix_alpm_mode = messages  - 0x30;
+	//0:alpm off 1:alpm 60nits on 2:alpm 10nits on 3:alpm 10nits->60nits 4:alpm 60nits->10nits
+    pr_debug("%s alpm_mode:%d len:%zu buff:%c\n",__func__,phoenix_alpm_mode,len,messages);
+    set_phoenix_alpm_cmd(phoenix_alpm_mode);
+
+    return len;
+}
+
+
+static int phoenix_alpm_mode_proc_read(struct seq_file *buf, void *v)
+{
+		seq_printf(buf, "alpm_mode 0x%x\n", phoenix_alpm_mode);
+		return 0;
+}
+
+static int phoenix_alpm_mode_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file,phoenix_alpm_mode_proc_read,NULL);
+}
+
+
+
+static struct file_operations panel_alpm_mode_phoenix_proc_ops = {
+	.open = phoenix_alpm_mode_proc_open,
+	.read = seq_read,
+	.write = phoenix_alpm_mode_proc_write,
+	.release = single_release,
+};
+
+static void create_panel_alpm_mode_phoenix_proc_file(void)
+{
+    panel_alpm_mode_phoenix_proc_file = proc_create("alpm_mode", 0666,NULL, &panel_alpm_mode_phoenix_proc_ops);
+    if(panel_alpm_mode_phoenix_proc_file){
+        pr_debug("create panel_alpm_mode_proc_file sucessed!\n");
+    }else{
+		pr_err("create panel_alpm_mode_proc_file failed!\n");
+    }
+}
+
+#endif
+//<ASUS BSP Robert_He 20170419>add hbm mode In kernel------
 
 void mdss_dsi_panel_pwm_cfg(struct mdss_dsi_ctrl_pdata *ctrl)
 {
@@ -160,7 +805,7 @@ int mdss_dsi_panel_cmd_read(struct mdss_dsi_ctrl_pdata *ctrl, char cmd0,
 	return mdss_dsi_cmdlist_put(ctrl, &cmdreq);
 }
 
-static void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,
+void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,
 			struct dsi_panel_cmds *pcmds, u32 flags)
 {
 	struct dcs_cmd_req cmdreq;
@@ -188,37 +833,281 @@ static void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,
 
 	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
 }
+EXPORT_SYMBOL(mdss_dsi_panel_cmds_send);
+
+//<ASUS BSP Hank2_Liu 20160628>Dyanmic calibration backlight In kernel++++++  
+static void initKernelEnv(void)
+{
+    oldfs = get_fs();
+    set_fs(KERNEL_DS);
+}
+
+static void deinitKernelEnv(void)
+{
+    set_fs(oldfs);
+}
+
+int lcd_calculate_backlight_float(uint8_t byte1, uint8_t byte2, uint8_t byte3, uint8_t byte4)
+{
+    unsigned int raw_data, mantissa;
+    int mantissa_val=0;
+    int exp, i, float_bl = -1;
+
+    raw_data = (byte1<<24) | (byte2<<16) | (byte3<<8) | byte4;
+
+    exp = ((raw_data & 0x7F800000) >> SHIFT_MASK);
+    exp = exp - 127;
+
+    mantissa = raw_data & 0x7FFFFF;
+    for(i=0; i<=SHIFT_MASK; i++) {    /*bit 23 = 1/2, bit 22 = 1/4*/
+        if ((mantissa >> (SHIFT_MASK - i)) & 0x01)
+            mantissa_val += 100000/(0x01 << i);
+    }
+
+    float_bl = (0x01 << exp) + ((0x01 << exp) * mantissa_val / 100000);
+
+	return float_bl;
+}
+
+
+bool lcd_adjust_backlight(uint8_t byte1, uint8_t byte2, uint8_t byte3, uint8_t byte4, uint8_t byte5)
+{
+    unsigned int readstr;
+    unsigned int asus_lcdID;
+    int readlen =0;
+    struct inode *inode;
+    struct file *fp = NULL;
+    unsigned char *buf = NULL;
+
+    sscanf(lcd_unique_id, "%x", &readstr);
+    asus_lcdID = ((readstr>>24) ^ 0x55 ^ (readstr>>16) ^ (readstr>>8) ^ (readstr)) & 0xff;
+
+    printk("[Display] Panel Unique ID from Phone: 0x%x\n", asus_lcdID);
+    printk("[Display] Panel Unique ID from File : 0x%x\n", byte1);
+	
+   g_actual_bl = 	lcd_calculate_backlight_float( byte2, byte3, byte4, byte5);
+    printk("[Display] Actual Panel Backlight value = %d \n", g_actual_bl);
+
+    if (asus_lcdID == byte1) {
+        initKernelEnv();
+        fp = filp_open(BL_CALIBRATION_PATH, O_RDONLY, 0);
+        if (!IS_ERR_OR_NULL(fp)) {
+            inode = fp->f_dentry->d_inode;
+            buf = kmalloc(inode->i_size, GFP_KERNEL);
+
+            if (fp->f_op != NULL && fp->f_op->read != NULL) {
+                readlen = fp->f_op->read(fp, buf, inode->i_size, &(fp->f_pos));
+                buf[readlen] = '\0';
+            }
+            sscanf(buf, "%d", &g_adjust_bl);
+            printk("[Display] Dynamic calibration Backlight value = %d\n", g_adjust_bl);
+
+            g_asus_lcdID_verify = 1;
+            deinitKernelEnv();
+            filp_close(fp, NULL);
+            kfree(buf);
+        } else {
+			g_adjust_bl = BL_DEFAULT;
+            pr_err("[Display] Dynamic calibration Backlight disable\n");
+            return false;
+        }
+    } else
+        return false;
+
+    return true;
+}
+
+bool lcd_read_calibration_file(void)
+{
+    int ret;
+    int readlen =0;
+    off_t fsize;
+    struct file *fp = NULL;
+    struct inode *inode;
+    uint8_t *buf = NULL;
+
+    initKernelEnv();
+
+    fp = filp_open(LCD_CALIBRATION_PATH, O_RDONLY, 0);
+    if (IS_ERR_OR_NULL(fp)) {
+        pr_err("[Display] Read (%s) failed\n", LCD_CALIBRATION_PATH);
+        return false;
+    }
+
+    inode = fp->f_dentry->d_inode;
+    fsize = inode->i_size;
+    buf = kmalloc(fsize, GFP_KERNEL);
+
+    if (fp->f_op != NULL && fp->f_op->read != NULL) {
+        readlen = fp->f_op->read(fp, buf, fsize, &(fp->f_pos));
+        if (readlen < 0) {
+            DEV_ERR("[Display] Read (%s) error\n", LCD_CALIBRATION_PATH);
+            deinitKernelEnv();
+            filp_close(fp, NULL);
+            kfree(buf);
+            return false;
+        }
+    } else
+        pr_err("[Display] Read (%s) f_op=NULL or op->read=NULL\n", LCD_CALIBRATION_PATH);
+
+    deinitKernelEnv();
+    filp_close(fp, NULL);
+	
+    g_calibrated_bl = lcd_calculate_backlight_float( buf[102], buf[101], buf[100], buf[99]);
+    printk("[Display] Panel Calibrated Backlight: %d\n", g_calibrated_bl);
+	g_lcd_uniqueId_crc = buf[5];
+
+    ret = lcd_adjust_backlight(buf[5], buf[55], buf[54], buf[53], buf[52]);
+    if(!ret)
+        g_asus_lcdID_verify = 0;
+
+    kfree(buf);
+    return true;
+}
+
 
 static char led_pwm1[2] = {0x51, 0x0};	/* DTYPE_DCS_WRITE1 */
-static struct dsi_cmd_desc backlight_cmd = {
-	{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(led_pwm1)},
-	led_pwm1
+static struct dsi_cmd_desc backlight_cmd[] = {
+	{{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(cabc_dim_off_cmd)}, cabc_dim_off_cmd},
+	{{DTYPE_DCS_WRITE1, 1, 0, 0, 50, sizeof(led_pwm1)}, led_pwm1},
+	{{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(cabc_dim_on_cmd)},cabc_dim_on_cmd},
 };
+#ifndef ZS550KL
+/*follow qcom code flow:adjust the brightness value of display for ZE553KL*/
+static struct dsi_cmd_desc backlight_cmd_hades = {
+	{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(led_pwm1)}, led_pwm1
+};
+#endif
 
 static void mdss_dsi_panel_bklt_dcs(struct mdss_dsi_ctrl_pdata *ctrl, int level)
 {
 	struct dcs_cmd_req cmdreq;
 	struct mdss_panel_info *pinfo;
-
+	int tmp_level = 0;
+	static bool g_bl_first_bootup = true;
+    int rc;
+	int level1;
+#ifndef ZS550KL
+	static uint8_t prev_bkl_level = 4;
+	uint8_t new_bkl_level;
+#endif
+	/*follow qcom code flow:use dcs control bklt when level == 0 for ASUS_ZD552KL_PHOENIX*/
+	if (level == 0 && (ASUS_ZD552KL_PHOENIX != asus_project_id) && (ASUS_ZE553KL != asus_project_id)) {
+        return;
+    }
 	pinfo = &(ctrl->panel_data.panel_info);
 	if (pinfo->dcs_cmd_by_left) {
 		if (ctrl->ndx != DSI_CTRL_LEFT)
 			return;
 	}
 
-	pr_debug("%s: level=%d\n", __func__, level);
+	/*donnot read calibration file for ASUS_ZD552KL_PHOENIX currently, add it later*/
+	if (g_bl_first_bootup && (ASUS_ZD552KL_PHOENIX != asus_project_id) && (ASUS_ZE553KL != asus_project_id)) {
+        rc = lcd_read_calibration_file();
+        if(!rc)
+            pr_err("%s: Backlight calibration read failed\n", __func__);
+        g_bl_first_bootup = false;
+    }
 
-	led_pwm1[1] = (unsigned char)level;
+
+    /*donnot adjust level value for ASUS_ZD552KL_PHOENIX*/
+    if((ASUS_ZD552KL_PHOENIX != asus_project_id) && (ASUS_ZE553KL != asus_project_id )){
+		tmp_level = level;
+		if ((g_adjust_bl < g_calibrated_bl) && (g_adjust_bl > 0))
+			level = level * g_adjust_bl / g_calibrated_bl;
+	
+		if (level < pinfo->bl_min)
+			level = pinfo->bl_min;
+	
+		if(asus_lcd_id == 1)
+		{
+			if ( level <= TD4300_BL_THRESHOLD&& level > 0)
+				level =TD4300_BL_THRESHOLD;
+		}else if(asus_lcd_id == 3){
+			if ( level <= TM_TD4300_BL_THRESHOLD&& level > 0)
+				level =TM_TD4300_BL_THRESHOLD;
+		}
+	}
+//<ASUS BSP Robert_He 20170428>remove adjust backlight log for ZD552KL++++++
+	if (ASUS_ZD552KL_PHOENIX != asus_project_id)
+	{
+		pr_info("%s: level=%d\n", __func__, level);
+	}
+//<ASUS BSP Robert_He 20170511>print backlight log when resume++++++
+#ifdef ZD552KL_PHOENIX
+	if (panel_resume_on || level == 0)
+	{
+		pr_info("%s: level=%d\n", __func__, level);
+		if (panel_resume_on == true)
+			panel_resume_on = false;
+	}
+//<ASUS BSP Robert_He 20170605>disable capsensor when panel brightness is 0+++
+	if (level == 0)
+		disable_cap_off = true;
+	else
+		disable_cap_off = false;
+//<ASUS BSP Robert_He 20170605>disable capsensor when panel brightness is 0---
+#endif
+//<ASUS BSP Robert_He 20170511>print backlight log when resume------
+//<ASUS BSP Robert_He 20170419>remove adjust backlight log for ZD552KL------
+
+	/*follow qcom code flow:ASUS_ZD552KL_PHOENIX panel max backlight value is 0xFF*/
+	if((ASUS_ZD552KL_PHOENIX == asus_project_id)||(ASUS_ZE553KL == asus_project_id))
+		level1 = level;
+	else
+		level1 = level/16;
+
+//<ASUS BSP Robert_He 20170428>add support for adjust pwm duty cycle for ZD552KL TM panel++++++
+	if(((ASUS_ZE553KL == asus_project_id) && (TM_PANEL == asus_lcd_id)) || (ASUS_ZD552KL_PHOENIX == asus_project_id) ){
+		if((tm_bkl_level_prev <= 6) && (level1 > 6)){
+			pr_info("%s tm_bkl_pwm_6pulse_cmds\n",__func__);
+			mdss_dsi_panel_cmds_send(ctrl, &tm_bkl_pwm_6pulse_cmds, CMD_REQ_COMMIT);
+		}else if((tm_bkl_level_prev > 6) && (level1 <= 6)){
+			pr_info("%s tm_bkl_pwm_4pulse_cmds\n",__func__);
+			mdss_dsi_panel_cmds_send(ctrl, &tm_bkl_pwm_4pulse_cmds, CMD_REQ_COMMIT);
+		}
+	}
+//<ASUS BSP Robert_He 20170428>add support for adjust pwm duty cycle for ZD552KL TM panel------
+
+	led_pwm1[1] = (unsigned char)level1;
 
 	memset(&cmdreq, 0, sizeof(cmdreq));
-	cmdreq.cmds = &backlight_cmd;
-	cmdreq.cmds_cnt = 1;
+
+	/*follow qcom code flow:adjust the brightness value of display for ASUS_ZD552KL_PHOENIX*/
+	if((ASUS_ZD552KL_PHOENIX == asus_project_id)||(ASUS_ZE553KL == asus_project_id)){
+		cmdreq.cmds = &backlight_cmd_hades;
+		cmdreq.cmds_cnt = 1;
+	}else{
+		cmdreq.cmds = backlight_cmd;
+		cmdreq.cmds_cnt = 3;
+	}
+
 	cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL;
 	cmdreq.rlen = 0;
 	cmdreq.cb = NULL;
 
 	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
+#ifndef ZS550KL
+	//asus bsp write bkl level to ASUS Event Log+++
+	new_bkl_level = (level1/64);//0:0~63 1:64~127 2:128~191 3:192~255
+	if(new_bkl_level != prev_bkl_level){
+		ASUSEvtlog("[BKL]level:%d\n",new_bkl_level);
+		prev_bkl_level = new_bkl_level;
+	}
+	//asus bsp write bkl level to ASUS Event Log---
+//<ASUS BSP Robert_He 20170419>add hbm mode In kernel++++++
+#ifdef ZD552KL_PHOENIX
+	phoenix_bkl_level_hbm = level1;
+#endif
+//<ASUS BSP Robert_He 20170419>add hbm mode In kernel------
+
+#ifdef ZE553KL
+    bkl_level_hbm = level1;//asus bsp hbm mode
+#endif
+    tm_bkl_level_prev = level1;
+#endif
 }
+//<ASUS BSP Hank2_Liu 20160628>Dyanmic calibration backlight In kernel------  
 
 static int mdss_dsi_request_gpios(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
@@ -280,7 +1169,7 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 		pr_err("%s: Invalid input data\n", __func__);
 		return -EINVAL;
 	}
-
+	pr_info("enter %s %d\n",__func__,enable);
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
@@ -646,7 +1535,15 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 {
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 	struct mdss_dsi_ctrl_pdata *sctrl = NULL;
+	struct dsi_panel_cmds *on_cmds = NULL;
+	struct dsi_ctrl_hdr *dchdr;
+	bool bl_wled_ctrl = false;
+	char *bp;
+	int i, len;
+	int temp;
 
+	static bool wq = false;
+	
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
 		return;
@@ -655,44 +1552,139 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
+	/*need not parse DIM_MODE for ASUS_ZD552KL_PHOENIX*/
+	if (cabc_first_boot && (ASUS_ZD552KL_PHOENIX != asus_project_id) && (ASUS_ZE553KL != asus_project_id)) {
+			on_cmds = &ctrl_pdata->on_cmds;
+			bp = on_cmds->buf;
+			len = on_cmds->blen;
+
+			for (i = 0; i < on_cmds->cmd_cnt; i++) {
+				dchdr = (struct dsi_ctrl_hdr *)bp;
+				len -= sizeof(*dchdr);
+				bp += sizeof(*dchdr);
+				if (bp[0] == 0xCE) {
+					printk("[Display] %s:: TM CABC DIM_MODE = 0x%x\n", __func__, bp[1]);
+					cabc_dim_off_cmd[1] = bp[1] & 0x0F;
+					cabc_dim_on_cmd[1] = bp[1];
+				}
+				bp += dchdr->dlen;
+				len -= dchdr->dlen;
+			}
+		cabc_first_boot = false;
+	}
+
+	/*follow qcom code flow:donnot run display_cmd_callback for ASUS_ZD552KL_PHOENIX */
+	if((ASUS_ZD552KL_PHOENIX != asus_project_id) && (ASUS_ZE553KL != asus_project_id)){
+		spin_lock(&bklt_lock);
+		if (g_previous_bl == 0) {
+			g_timer = true;
+			wq = true;
+		} else
+			wq = false;
+		g_previous_bl = bl_level;
+		spin_unlock(&bklt_lock);
+
+		if (wq) {
+			queue_delayed_work(display_workqueue, &display_work, 0);
+		}
+
+		if (g_timer)
+			return;
+	}
+
 	/*
 	 * Some backlight controllers specify a minimum duty cycle
 	 * for the backlight brightness. If the brightness is less
 	 * than it, the controller can malfunction.
 	 */
-
 	if ((bl_level < pdata->panel_info.bl_min) && (bl_level != 0))
 		bl_level = pdata->panel_info.bl_min;
 
+	/*donnot use wled control backlight for ASUS_ZD552KL_PHOENIX*/
+	if (bl_level >= g_bl_threshold || (ASUS_ZD552KL_PHOENIX == asus_project_id) || (ASUS_ZE553KL == asus_project_id))
+		bl_wled_ctrl =false;
+	else 
+		bl_wled_ctrl =true;
+
+	mutex_lock(&bl_cmd_mutex);
 	switch (ctrl_pdata->bklt_ctrl) {
 	case BL_WLED:
+//<ASUS_BSP Hank2_Liu>Disable Cabc mode In Factory image ++++++
 		led_trigger_event(bl_led_trigger, bl_level);
+//<ASUS_BSP Hank2_Liu>Disable Cabc mode In Factory image ------
 		break;
 	case BL_PWM:
 		mdss_dsi_panel_bklt_pwm(ctrl_pdata, bl_level);
 		break;
 	case BL_DCS_CMD:
-		if (!mdss_dsi_sync_wait_enable(ctrl_pdata)) {
-			mdss_dsi_panel_bklt_dcs(ctrl_pdata, bl_level);
-			break;
-		}
-		/*
-		 * DCS commands to update backlight are usually sent at
-		 * the same time to both the controllers. However, if
-		 * sync_wait is enabled, we need to ensure that the
-		 * dcs commands are first sent to the non-trigger
-		 * controller so that when the commands are triggered,
-		 * both controllers receive it at the same time.
-		 */
-		sctrl = mdss_dsi_get_other_ctrl(ctrl_pdata);
-		if (mdss_dsi_sync_wait_trigger(ctrl_pdata)) {
-			if (sctrl)
-				mdss_dsi_panel_bklt_dcs(sctrl, bl_level);
-			mdss_dsi_panel_bklt_dcs(ctrl_pdata, bl_level);
-		} else {
-			mdss_dsi_panel_bklt_dcs(ctrl_pdata, bl_level);
-			if (sctrl)
-				mdss_dsi_panel_bklt_dcs(sctrl, bl_level);
+//<ASUS_BSP Robert_He 20170511>remove useless log for ZD552KL ++++++
+		if (ASUS_ZD552KL_PHOENIX != asus_project_id)
+		    pr_info("bl_wled_ctrl=%d,\n",bl_wled_ctrl);
+//<ASUS_BSP Robert_He 20170511>remove useless log for ZD552KL ------
+		if(!bl_wled_ctrl){
+			if (!mdss_dsi_sync_wait_enable(ctrl_pdata)) {
+				mdss_dsi_panel_bklt_dcs(ctrl_pdata, bl_level);
+				/*donnot use wled control backlight for ASUS_ZD552KL_PHOENIX*/
+				if (bl_level && !bl_wled_enable && (ASUS_ZD552KL_PHOENIX != asus_project_id) && (ASUS_ZE553KL != asus_project_id)) {
+					if (g_last_bl) {
+						for (temp=0;temp<=g_wled_dimming_div;temp++) {
+							led_trigger_event(bl_led_trigger, 4095*g_last_bl/g_bl_threshold+( (4095*(g_bl_threshold-g_last_bl) / g_bl_threshold/ g_wled_dimming_div) *temp));
+							msleep(10);
+						}
+					} else
+						led_trigger_event(bl_led_trigger, WLED_MAX_LEVEL_ENABLE);	
+					printk("[DISPLAY] %s:: bl_wled_enable ctrl enable \n", __func__);
+					bl_wled_enable = true;
+				}
+				break;
+			}
+			sctrl = mdss_dsi_get_other_ctrl(ctrl_pdata);
+			if (mdss_dsi_sync_wait_trigger(ctrl_pdata)) {
+				if (sctrl)
+					mdss_dsi_panel_bklt_dcs(sctrl, bl_level);
+				mdss_dsi_panel_bklt_dcs(ctrl_pdata, bl_level);
+			} else {
+				mdss_dsi_panel_bklt_dcs(ctrl_pdata, bl_level);
+				if (sctrl)
+					mdss_dsi_panel_bklt_dcs(sctrl, bl_level);
+			}
+		}else{
+			if (bl_level == 0) {
+					led_trigger_event(bl_led_trigger, WLED_MIN_LEVEL_DISABLE);	
+					printk("[DISPLAY] %s:: bl_wled_enable ctrl disable \n", __func__);
+					if (!mdss_dsi_sync_wait_enable(ctrl_pdata))
+						mdss_dsi_panel_bklt_dcs(ctrl_pdata, 0);
+					bl_wled_enable = false;
+			 }  else {
+					bl_wled_enable = false;
+					if (!mdss_dsi_sync_wait_enable(ctrl_pdata))
+						mdss_dsi_panel_bklt_dcs(ctrl_pdata, g_bl_threshold);
+
+					if (g_last_bl == 0) {
+							printk("%s::[DISPLAY] system resume set BL wled directly\n", __func__);
+							led_trigger_event(bl_led_trigger, 4095*bl_level/g_bl_threshold);
+
+					} else if ((bl_level < g_last_bl) && g_last_bl >= g_bl_threshold) {			
+								for (temp=g_wled_dimming_div;temp>=0;temp--) {
+									led_trigger_event(bl_led_trigger, 4095*bl_level/g_bl_threshold +( (4095*(g_bl_threshold-bl_level) / g_bl_threshold / g_wled_dimming_div) *temp));
+									msleep(10);
+								}
+					}else if (bl_level < g_last_bl ) {
+								for (temp=g_wled_dimming_div;temp>=0;temp--) {
+									led_trigger_event(bl_led_trigger, 4095*bl_level/g_bl_threshold +( (4095*(g_last_bl-bl_level) / g_bl_threshold / g_wled_dimming_div) *temp));
+									msleep(10);
+								}
+					}else if (g_last_bl < bl_level) {
+								for (temp=0;temp<=g_wled_dimming_div;temp++) {
+									led_trigger_event(bl_led_trigger, 4095*g_last_bl/g_bl_threshold+( (4095*(bl_level-g_last_bl) / g_bl_threshold / g_wled_dimming_div) *temp));
+									msleep(10);
+								}
+
+					} else
+							printk("%s:: [DISPLAY] set BL error \n", __func__);
+
+						
+			}
 		}
 		break;
 	default:
@@ -700,7 +1692,27 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 			__func__);
 		break;
 	}
+
+	if((ASUS_ZD552KL_PHOENIX != asus_project_id) && (ASUS_ZE553KL != asus_project_id))
+		g_last_bl = bl_level;
+	mutex_unlock(&bl_cmd_mutex);
 }
+
+static void display_cmd_callback(void)
+{
+    if (g_previous_bl) {
+		g_timer = false;
+        mdss_dsi_panel_bl_ctrl(gdata, g_previous_bl);
+        msleep(32);
+        set_tcon_cmd(dimming_cmd, ARRAY_SIZE(dimming_cmd));
+    }
+}
+
+static void display_func(struct work_struct *ws)
+{
+    display_cmd_callback();
+}
+
 
 static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 {
@@ -714,6 +1726,17 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 		return -EINVAL;
 	}
 
+#ifdef ZS550KL
+	mutex_lock(&(asus_rmi4_data->cover_mutex));
+#endif
+
+	printk("[Display] enter mdss_dsi_panel_on\n");
+#ifdef ZS550KL
+	//mdss_dsi_panel_reset(pdata,0);
+	//mdss_dsi_panel_reset(pdata,1);
+	asus_rmi4_resume();
+#endif
+	printk("[Display] Touch resume OK\n");
 	pinfo = &pdata->panel_info;
 	ctrl = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
@@ -736,13 +1759,24 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 
 	if (on_cmds->cmd_cnt)
 		mdss_dsi_panel_cmds_send(ctrl, on_cmds, CMD_REQ_COMMIT);
-
+	
 	if (pinfo->compression_mode == COMPRESSION_DSC)
 		mdss_dsi_panel_dsc_pps_send(ctrl, pinfo);
 
 	if (ctrl->ds_registered)
 		mdss_dba_utils_video_on(pinfo->dba_data, pinfo);
+
+	/*need not set cabc_mode for ASUS_ZD552KL_PHOENIX*/
+	if((ASUS_ZD552KL_PHOENIX != asus_project_id) && (ASUS_ZE553KL != asus_project_id))
+		set_tcon_cmd(cabc_mode, ARRAY_SIZE(cabc_mode));
+//<ASUS BSP Robert_He 20170428>add support for adjust pwm duty cycle for ZD552KL TM panel++++++
+	if(((ASUS_ZE553KL == asus_project_id) && (TM_PANEL == asus_lcd_id)) || (ASUS_ZD552KL_PHOENIX == asus_project_id))
+		tm_bkl_level_prev = 255;
+//<ASUS BSP Robert_He 20170428>add support for adjust pwm duty cycle for ZD552KL TM panel------
 end:
+#ifdef ZS550KL
+	mutex_unlock(&(asus_rmi4_data->cover_mutex));
+#endif
 	pr_debug("%s:-\n", __func__);
 	return ret;
 }
@@ -796,6 +1830,10 @@ static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 		return -EINVAL;
 	}
 
+#ifdef ZS550KL
+	mutex_lock(&(asus_rmi4_data->cover_mutex));
+#endif
+	printk("[Display] : Enter mdss_dsi_panel_off\n");
 	pinfo = &pdata->panel_info;
 	ctrl = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
@@ -814,8 +1852,16 @@ static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 		mdss_dba_utils_video_off(pinfo->dba_data);
 		mdss_dba_utils_hdcp_enable(pinfo->dba_data, false);
 	}
-
+	mdelay(30);
+#ifdef ZS550KL
+	asus_rmi4_suspend();
+#else
+	printk("[Display] : end to send 28 10\n");
+#endif
 end:
+#ifdef ZS550KL
+	mutex_unlock(&(asus_rmi4_data->cover_mutex));
+#endif
 	pr_debug("%s:-\n", __func__);
 	return 0;
 }
@@ -1863,7 +2909,6 @@ static int mdss_dsi_parse_panel_features(struct device_node *np,
 		"qcom,suspend-ulps-enabled");
 	pr_info("%s: ulps during suspend feature %s", __func__,
 		(pinfo->ulps_suspend_enabled ? "enabled" : "disabled"));
-
 	mdss_dsi_parse_dms_config(np, ctrl);
 
 	pinfo->panel_ack_disabled = pinfo->sim_panel_mode ?
@@ -2080,6 +3125,10 @@ int mdss_panel_parse_bl_settings(struct device_node *np,
 								 __func__);
 			}
 		} else if (!strcmp(data, "bl_ctrl_dcs")) {
+			/*need not use wled control backlight for ZE553KL*/
+			if(ASUS_ZE553KL != asus_project_id)
+			led_trigger_register_simple("bkl-trigger",
+				&bl_led_trigger); 
 			ctrl_pdata->bklt_ctrl = BL_DCS_CMD;
 			pr_debug("%s: Configured DCS_CMD bklt ctrl\n",
 								__func__);
@@ -2558,7 +3607,27 @@ static int mdss_panel_parse_dt(struct device_node *np,
 
 	mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->off_cmds,
 		"qcom,mdss-dsi-off-command", "qcom,mdss-dsi-off-command-state");
-
+#ifdef ZD552KL_PHOENIX	
+	/*asus always on display+++*/
+//<ASUS BSP Robert_He 201704509>use lp mode send panel always on cmd++++++
+	mdss_dsi_parse_dcs_cmds(np, &phoenix_alpm_on_40nits_cmds,
+		"qcom,mdss-dsi-alpm-on-40nits-command", "qcom,mdss-dsi-on-command-state");
+	mdss_dsi_parse_dcs_cmds(np, &phoenix_alpm_on_5nits_cmds,
+		"qcom,mdss-dsi-alpm-on-5nits-command", "qcom,mdss-dsi-on-command-state");
+		mdss_dsi_parse_dcs_cmds(np, &phoenix_alpm_off_cmds,
+		"qcom,mdss-dsi-alpm-off-command", "qcom,mdss-dsi-on-command-state");
+	mdss_dsi_parse_dcs_cmds(np, &tm_51pulse_cmds,
+			"qcom,mdss-dsi-51pulse-command", "");
+//<ASUS BSP Robert_He 201704509>use lp mode send panel always on cmd------
+#endif
+//<ASUS BSP Robert_He 20170428>add support for adjust pwm duty cycle for ZD552KL TM panel++++++
+	if(((ASUS_ZE553KL == asus_project_id) && (TM_PANEL == asus_lcd_id)) || (ASUS_ZD552KL_PHOENIX == asus_project_id)){
+		mdss_dsi_parse_dcs_cmds(np, &tm_bkl_pwm_4pulse_cmds,
+			"qcom,mdss-dsi-bkl-pwm-4pulse-command", "");
+		mdss_dsi_parse_dcs_cmds(np, &tm_bkl_pwm_6pulse_cmds,
+			"qcom,mdss-dsi-bkl-pwm-6pulse-command", "");
+	}
+//<ASUS BSP Robert_He 20170428>add support for adjust pwm duty cycle for ZD552KL TM panel------
 	rc = of_property_read_u32(np, "qcom,adjust-timer-wakeup-ms", &tmp);
 	pinfo->adjust_timer_delay_ms = (!rc ? tmp : 0);
 
@@ -2609,9 +3678,29 @@ int mdss_dsi_panel_init(struct device_node *node,
 		pr_err("%s: Invalid arguments\n", __func__);
 		return -ENODEV;
 	}
+//<ASUS-Hank2_Liu-2016/04/27> Read Unique ID Information ++++++
+	mutex_init(&bl_cmd_mutex);
+    if(ASUS_ZE553KL != asus_project_id && ASUS_ZD552KL_PHOENIX != asus_project_id){
+        mutex_init(&cmd_mutex);
+        create_cabc_mode_switch_file();
+    }
+	create_lcd_ID_proc_file();
+	create_lcd_uniqueID_proc_file();
+//<ASUS BSP Robert_He 20170419>add hbm mode In kernel++++++
+#ifdef ZD552KL_PHOENIX
+	create_panel_hbm_mode_phoenix_proc_file();
+	create_panel_alpm_mode_phoenix_proc_file();
 
+#endif
+//<ASUS BSP Robert_He 20170419>add hbm mode In kernel------
+
+#ifdef ZE553KL
+    create_panel_hbm_mode_proc_file();//asus hbm mode
+#endif
+
+//<ASUS-Hank2_Liu-2016/04/27> Read Unique ID Information ------
 	pinfo = &ctrl_pdata->panel_data.panel_info;
-
+	gdata = &ctrl_pdata->panel_data;
 	pr_debug("%s:%d\n", __func__, __LINE__);
 	pinfo->panel_name[0] = '\0';
 	panel_name = of_get_property(node, "qcom,mdss-dsi-panel-name", NULL);
@@ -2638,6 +3727,96 @@ int mdss_dsi_panel_init(struct device_node *node,
 	ctrl_pdata->low_power_config = mdss_dsi_panel_low_power_config;
 	ctrl_pdata->panel_data.set_backlight = mdss_dsi_panel_bl_ctrl;
 	ctrl_pdata->switch_mode = mdss_dsi_panel_switch_mode;
+	if(ASUS_ZE553KL != asus_project_id && ASUS_ZD552KL_PHOENIX != asus_project_id){
+	if(asus_lcd_id == 1)
+	{
+		g_bl_threshold = TD4300_BL_THRESHOLD;
+	}else
+		g_bl_threshold = TM_TD4300_BL_THRESHOLD;
 
+	if(asus_lcd_id == 1)
+	{
+		g_wled_dimming_div = 20;
+	}else
+		g_wled_dimming_div = 20;
+	printk("%s:: TM g_bl_threshold(%d) g_wled_dimming_div(%d)\n", __func__, g_bl_threshold, g_wled_dimming_div);
+	
+	display_workqueue = create_workqueue("display_wq");
+	}
 	return 0;
 }
+
+#ifdef ZD552KL_PHOENIX
+void set_phoenix_alpm_cmd(short alpm_mode)
+{
+    struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+    pr_debug("%s:alpm_mode:%d]+ asus_lcd_id:%d\n", __func__,alpm_mode,asus_lcd_id);
+
+    if((alpm_mode > 4) || (alpm_mode < 0)){
+		pr_err("wrong alpm_mode number\n");
+		return ;
+    }
+	if (gdata == NULL)
+	{
+		pr_err("%s alpm_mode gdata is NULL\n",__func__);
+		return;
+	}
+    ctrl_pdata = container_of(gdata, struct mdss_dsi_ctrl_pdata,
+                panel_data);
+	
+	if (ctrl_pdata == NULL)
+	{
+		pr_err("%s alpm_mode ctrl_pdata is NULL\n",__func__);
+		return;		
+	}
+//<ASUS BSP Robert_He 20170509>disable hbm_mode when enter alpm In kernel++++++
+	switch(alpm_mode)
+	{
+		case 0:
+			//alpm off
+			 if (phoenix_alpm_off_cmds.cmd_cnt){
+				mdss_dsi_panel_cmds_send(ctrl_pdata, &phoenix_alpm_off_cmds, CMD_REQ_COMMIT);
+				//mdss_dsi_panel_bklt_dcs(ctrl_pdata,g_previous_bl);
+				already_alpm_mode = false;
+			}
+			break;
+		case 1:
+			//alpm on 40nits
+		 	if(phoenix_alpm_on_40nits_cmds.cmd_cnt){
+				mdss_dsi_panel_cmds_send(ctrl_pdata, &phoenix_alpm_on_40nits_cmds, CMD_REQ_COMMIT);
+				already_alpm_mode = true;
+		 	}
+			break;
+		case 2:
+			//alpm on 5nits
+			if( phoenix_alpm_on_5nits_cmds.cmd_cnt){
+				mdss_dsi_panel_cmds_send(ctrl_pdata, &phoenix_alpm_on_5nits_cmds, CMD_REQ_COMMIT);
+				already_alpm_mode = true;
+			}
+			break;
+		case 3:
+			//alpm 5 nits(0x03) -> alpm 40 nits(0x1D)
+			if ( phoenix_alpm_on_40nits_cmds.cmd_cnt){
+				mdss_dsi_panel_cmds_send(ctrl_pdata, &phoenix_alpm_on_40nits_cmds, CMD_REQ_COMMIT);
+				already_alpm_mode = true;
+			}
+			break;
+		case 4:
+			//alpm 40 nits -> alpm 5 nits
+			if(  phoenix_alpm_on_5nits_cmds.cmd_cnt){
+				mdss_dsi_panel_cmds_send(ctrl_pdata, &phoenix_alpm_on_5nits_cmds, CMD_REQ_COMMIT);
+				already_alpm_mode = true;
+			}
+			break;
+		default:
+			break;
+	}
+//<ASUS BSP Robert_He 201704509>disable hbm_mode when enter alpm In kernel------
+	pr_debug("%s:-\n", __func__);
+	return ;
+
+}
+EXPORT_SYMBOL(set_phoenix_alpm_cmd);
+#endif
+
+

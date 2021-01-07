@@ -63,7 +63,7 @@
 #define FREEZIO_N			BIT(1)
 #define POWER_DOWN			BIT(0)
 
-#define QUSB2PHY_PORT_TEST_CTRL		0xB8
+//#define QUSB2PHY_PORT_TEST_CTRL		0xB8
 
 #define QUSB2PHY_PORT_UTMI_CTRL1	0xC0
 #define SUSPEND_N			BIT(5)
@@ -115,9 +115,21 @@
 
 #define QUSB2PHY_REFCLK_ENABLE		BIT(0)
 
+unsigned int tune1;
+module_param(tune1, uint, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(tune1, "QUSB PHY TUNE1");
+
 unsigned int tune2;
 module_param(tune2, uint, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(tune2, "QUSB PHY TUNE2");
+
+unsigned int tune3;
+module_param(tune3, uint, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(tune3, "QUSB PHY TUNE3");
+
+unsigned int tune4;
+module_param(tune4, uint, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(tune4, "QUSB PHY TUNE4");
 
 struct qusb_phy {
 	struct usb_phy		phy;
@@ -141,7 +153,9 @@ struct qusb_phy {
 	struct regulator	*vdda18;
 	int			vdd_levels[3]; /* none, low, high */
 	int			init_seq_len;
+	int			init_seq_len_host;
 	int			*qusb_phy_init_seq;
+	int			*qusb_phy_init_seq_host;
 
 	u32			tune2_val;
 	int			tune2_efuse_bit_pos;
@@ -770,9 +784,18 @@ static int qusb_phy_init(struct usb_phy *phy)
 	/* save reset value to override based on clk scheme */
 	reset_val = readl_relaxed(qphy->base + QUSB2PHY_PLL_TEST);
 
-	if (qphy->qusb_phy_init_seq)
+	// ASUS_BSP "Support using different set of PHY parameters for USB Host"
+	if(qphy->phy.flags & PHY_HOST_MODE){
+		printk("QUSB PHY init using host parameters");
+		if (qphy->qusb_phy_init_seq_host)
+		qusb_phy_write_seq(qphy->base, qphy->qusb_phy_init_seq_host,
+				qphy->init_seq_len_host, 0);
+	}else{
+		printk("QUSB PHY init using client parameters");
+		if (qphy->qusb_phy_init_seq)
 		qusb_phy_write_seq(qphy->base, qphy->qusb_phy_init_seq,
 				qphy->init_seq_len, 0);
+	}
 
 	/*
 	 * Check for EFUSE value only if tune2_efuse_reg is available
@@ -789,12 +812,33 @@ static int qusb_phy_init(struct usb_phy *phy)
 				qphy->base + QUSB2PHY_PORT_TUNE2);
 	}
 
+	/* If tune1 modparam set, override tune1 value */
+	if (tune1) {
+		pr_debug("%s(): (modparam) TUNE1 val:0x%02x\n",
+						__func__, tune1);
+		writel_relaxed(tune1,
+				qphy->base + QUSB2PHY_PORT_TUNE1);
+	}
 	/* If tune2 modparam set, override tune2 value */
 	if (tune2) {
 		pr_debug("%s(): (modparam) TUNE2 val:0x%02x\n",
 						__func__, tune2);
 		writel_relaxed(tune2,
 				qphy->base + QUSB2PHY_PORT_TUNE2);
+	}
+	/* If tune3 modparam set, override tune3 value */
+	if (tune3) {
+		pr_debug("%s(): (modparam) TUNE3 val:0x%02x\n",
+						__func__, tune3);
+		writel_relaxed(tune3,
+				qphy->base + QUSB2PHY_PORT_TUNE3);
+	}
+	/* If tune4 modparam set, override tune4 value */
+	if (tune4) {
+		pr_debug("%s(): (modparam) TUNE4 val:0x%02x\n",
+						__func__, tune4);
+		writel_relaxed(tune4,
+				qphy->base + QUSB2PHY_PORT_TUNE4);
 	}
 
 	/* ensure above writes are completed before re-enabling PHY */
@@ -994,10 +1038,15 @@ static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 			writel_relaxed(intr_mask,
 				qphy->base + QUSB2PHY_PORT_INTR_CTRL);
 
-			/* enable phy auto-resume */
+/* <ASUS-Lotta_Lu-20170515>
+	Some OTG Mouse connect with devices may have a short DP drop and up (remote wakeup signal)
+	after device side drive it high , so it could affect the mouse enumeration.
+	The remote wakeup signal causes auto resume mechanism.
+	
+			// enable phy auto-resume
 			writel_relaxed(0x0C,
 					qphy->base + QUSB2PHY_PORT_TEST_CTRL);
-			/* flush the previous write before next write */
+			// flush the previous write before next write 
 			wmb();
 			writel_relaxed(0x04,
 				qphy->base + QUSB2PHY_PORT_TEST_CTRL);
@@ -1006,8 +1055,9 @@ static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 			dev_dbg(phy->dev, "%s: intr_mask = %x\n",
 			__func__, intr_mask);
 
-			/* Makes sure that above write goes through */
+			// Makes sure that above write goes through
 			wmb();
+*/
 
 			qusb_phy_enable_clocks(qphy, false);
 		} else { /* Disconnect case */
@@ -1349,6 +1399,28 @@ static int qusb_phy_probe(struct platform_device *pdev)
 				qphy->init_seq_len);
 		} else {
 			dev_err(dev, "error allocating memory for phy_init_seq\n");
+		}
+	}
+
+	// ASUS_BSP "Support using different set of PHY parameters for USB Host"
+	of_get_property(dev->of_node, "qcom,qusb-phy-init-seq-host", &size);
+	if (size) {
+		qphy->qusb_phy_init_seq_host = devm_kzalloc(dev,
+						size, GFP_KERNEL);
+		if (qphy->qusb_phy_init_seq_host) {
+			qphy->init_seq_len_host =
+				(size / sizeof(*qphy->qusb_phy_init_seq_host));
+			if (qphy->init_seq_len_host % 2) {
+				dev_err(dev, "invalid init_seq_len_host\n");
+				return -EINVAL;
+			}
+
+			of_property_read_u32_array(dev->of_node,
+				"qcom,qusb-phy-init-seq-host",
+				qphy->qusb_phy_init_seq_host,
+				qphy->init_seq_len_host);
+		} else {
+			dev_err(dev, "error allocating memory for phy_init_seq_host\n");
 		}
 	}
 

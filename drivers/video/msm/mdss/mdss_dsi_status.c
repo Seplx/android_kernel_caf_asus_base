@@ -31,9 +31,9 @@
 #include "mdss_mdp.h"
 
 #define STATUS_CHECK_INTERVAL_MS 5000
-#define STATUS_CHECK_INTERVAL_MIN_MS 50
+#define STATUS_CHECK_INTERVAL_MIN_MS 200
 #define DSI_STATUS_CHECK_INIT -1
-#define DSI_STATUS_CHECK_DISABLE 1
+#define DSI_STATUS_CHECK_DISABLE 0
 
 static uint32_t interval = STATUS_CHECK_INTERVAL_MS;
 static int32_t dsi_status_disable = DSI_STATUS_CHECK_INIT;
@@ -209,7 +209,7 @@ static int param_set_interval(const char *val, struct kernel_param *kp)
 	return ret;
 }
 
-int __init mdss_dsi_status_init(void)
+static int __init mdss_dsi_status_init(void)
 {
 	int rc = 0;
 
@@ -238,7 +238,7 @@ int __init mdss_dsi_status_init(void)
 	return rc;
 }
 
-void __exit mdss_dsi_status_exit(void)
+static void __exit mdss_dsi_status_exit(void)
 {
 	fb_unregister_client(&pstatus_data->fb_notifier);
 	cancel_delayed_work_sync(&pstatus_data->check_status);

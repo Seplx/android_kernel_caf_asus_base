@@ -40,7 +40,7 @@ struct msm_cam_bus_pscale_data g_cv[CAM_BUS_CLIENT_MAX];
 
 
 /* Get all clocks from DT */
-static int msm_camera_get_clk_info_internal(struct device *dev,
+ int msm_camera_get_clk_info_internal(struct device *dev,
 			struct msm_cam_clk_info **clk_info,
 			struct clk ***clk_ptr,
 			size_t *num_clk)
@@ -455,7 +455,7 @@ long msm_camera_clk_set_rate(struct device *dev,
 EXPORT_SYMBOL(msm_camera_clk_set_rate);
 
 /* release memory allocated for clocks */
-static int msm_camera_put_clk_info_internal(struct device *dev,
+ int msm_camera_put_clk_info_internal(struct device *dev,
 				struct msm_cam_clk_info **clk_info,
 				struct clk ***clk_ptr, int cnt)
 {

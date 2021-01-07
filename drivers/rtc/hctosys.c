@@ -21,7 +21,7 @@
  * slow down the sync API. So here we have the truncated value and
  * the best guess is to add 0.5s.
  */
-
+int rtc_ready;
 static int __init rtc_hctosys(void)
 {
 	int err = -ENODEV;
@@ -62,6 +62,11 @@ static int __init rtc_hctosys(void)
 		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
 		tm.tm_hour, tm.tm_min, tm.tm_sec,
 		(unsigned int) tv.tv_sec);
+
+	if (rtc_ready == 0) {
+			rtc_ready = 1;
+			printk("%s: RTC set rtc_ready = 1\n", __func__);
+		}
 
 err_invalid:
 err_read:

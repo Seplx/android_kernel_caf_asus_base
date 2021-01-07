@@ -20,6 +20,12 @@
 #include <linux/msm_audio_ion.h>
 #include <sound/audio_calibration.h>
 #include <sound/audio_cal_utils.h>
+/* ASUS_BSP +++ */
+#include <linux/switch.h>
+#include <sound/soc.h>
+#include "../../codecs/msm8x16-wcd.h"
+#include "../../codecs/wcd-mbhc-v2.h"
+/* ASUS_BSP --- */
 
 struct audio_cal_client_info {
 	struct list_head		list;
@@ -35,6 +41,20 @@ struct audio_cal_info {
 
 static struct audio_cal_info	audio_cal;
 
+//<anna-cheng>for proximity near close touch in call
+int audio_mode = -1;
+int mode = -1;
+//<anna-cheng>for proximity near close touch in call
+
+/* ASUS_BPS +++ */
+extern struct msm8x16_wcd_priv *g_msm8x16_wcd_priv;
+extern uint32_t g_ZL;
+extern uint32_t g_ZR;
+/* ASUS_BPS --- */
+//sherry++ for nofity audiowizard
+int g_audiowizard_force_preset_state = 0;
+extern struct switch_dev *g_audiowizard_force_preset_sdev;
+//sherry-- for audiowizard
 
 static bool callbacks_are_equal(struct audio_cal_callbacks *callback1,
 				struct audio_cal_callbacks *callback2)
@@ -392,6 +412,7 @@ static long audio_cal_shared_ioctl(struct file *file, unsigned int cmd,
 	int				ret = 0;
 	int32_t				size;
 	struct audio_cal_basic		*data = NULL;
+	struct headset_imp_val *imp_val = NULL; // ASUS_BSP +++
 	pr_debug("%s\n", __func__);
 
 	switch (cmd) {
@@ -402,6 +423,70 @@ static long audio_cal_shared_ioctl(struct file *file, unsigned int cmd,
 	case AUDIO_GET_CALIBRATION:
 	case AUDIO_POST_CALIBRATION:
 		break;
+//<anna-cheng>for proximity near close touch in call
+	case AUDIO_SET_MODE:
+		mutex_lock(&audio_cal.cal_mutex[SET_MODE_TYPE]);
+		if(copy_from_user(&mode, (void *)arg,sizeof(mode))) {
+			pr_err("%s: Could not copy lmode to user\n", __func__);
+			ret = -EFAULT;
+		}
+		audio_mode = mode;
+		printk("%s: Audio mode status:audio_mode=%d\n",__func__,audio_mode);
+		mutex_unlock(&audio_cal.cal_mutex[SET_MODE_TYPE]);
+		goto done;
+//<anna-cheng>for proximity near close touch in call
+	/* ASUS_BSP +++ */
+	case AUDIO_GET_HS_IMP:
+		printk("AUDIO_GET_HS_IMP : start\n");
+		mutex_lock(&audio_cal.cal_mutex[GET_IMP_TYPE]);
+		imp_val = kmalloc(sizeof(struct headset_imp_val), GFP_KERNEL);
+		if (imp_val == NULL) {
+			//pr_err("%s: could not allocated codec_reg!\n", __func__);
+			printk("%s: could not allocated codec_reg!\n", __func__);
+			ret = -ENOMEM;
+			mutex_unlock(&audio_cal.cal_mutex[GET_IMP_TYPE]);
+			goto done;
+		}
+		if (copy_from_user(imp_val, (void *)arg,
+				sizeof(struct headset_imp_val))) {
+			//pr_err("%s: Could not copy codec_reg from user\n", __func__);
+			printk("%s: Could not copy codec_reg from user\n", __func__);
+			ret = -EFAULT;
+			mutex_unlock(&audio_cal.cal_mutex[GET_IMP_TYPE]);
+			goto done;
+		}
+		if ( g_msm8x16_wcd_priv->mbhc.current_plug == MBHC_PLUG_TYPE_NONE ||
+			g_msm8x16_wcd_priv->mbhc.current_plug  == MBHC_PLUG_TYPE_INVALID ) {
+			//pr_err("%s: headset not plugin or invalid plug\n", __func__);
+			printk("%s: headset not plugin or invalid plug\n", __func__);
+			ret = -EINVAL;
+			mutex_unlock(&audio_cal.cal_mutex[GET_IMP_TYPE]);
+			goto done;
+		}
+		imp_val->ZL = g_ZL;
+		imp_val->ZR = g_ZR;
+		printk("%s: RR = %d , LL = %d\n", __func__ , imp_val->ZR , imp_val->ZL);
+		if (copy_to_user((void *)arg, imp_val,
+				sizeof(struct headset_imp_val))) {
+			//pr_err("%s: Could not copy imp_val to user\n", __func__);
+			printk("%s: Could not copy imp_val to user\n", __func__);
+			ret = -EFAULT;
+		}
+		mutex_unlock(&audio_cal.cal_mutex[GET_IMP_TYPE]);
+		printk("AUDIO_GET_HS_IMP : done\n");
+		goto done;
+	/* ASUS_BSP --- */
+	case AUDIO_SET_AUDIOWIZARD_FORCE_PRESET:
+		mutex_lock(&audio_cal.cal_mutex[AUDIOWIZARD_FORCE_PRESET_TYPE]);
+		printk(" audio_cal_shared_ioctl #### AUDIO_SET_AUDIOWIZARD_FORCE_PRESET ");
+		if (copy_from_user(&g_audiowizard_force_preset_state, (void *)arg,
+				sizeof(g_audiowizard_force_preset_state))) {
+			pr_err("%s: Could not copy g_audiowizard_force_preset_state from user\n", __func__);
+ 			ret = -EFAULT;
+ 		}
+		switch_set_state(g_audiowizard_force_preset_sdev, g_audiowizard_force_preset_state);
+		mutex_unlock(&audio_cal.cal_mutex[AUDIOWIZARD_FORCE_PRESET_TYPE]);
+		goto done;
 	default:
 		pr_err("%s: ioctl not found!\n", __func__);
 		ret = -EFAULT;
@@ -453,6 +538,12 @@ static long audio_cal_shared_ioctl(struct file *file, unsigned int cmd,
 			data->cal_type.cal_hdr.buffer_number);
 		ret = -EINVAL;
 		goto done;
+	} else if ((data->hdr.cal_type_size + sizeof(data->hdr)) > size) {
+		pr_err("%s: cal type hdr size %zd + cal type size %d is greater than user buffer size %d\n",
+			__func__, sizeof(data->hdr), data->hdr.cal_type_size,
+			size);
+		ret = -EFAULT;
+		goto done;
 	}
 
 
@@ -490,13 +581,7 @@ static long audio_cal_shared_ioctl(struct file *file, unsigned int cmd,
 			goto unlock;
 		if (data == NULL)
 			goto unlock;
-		if ((sizeof(data->hdr) + data->hdr.cal_type_size) > size) {
-			pr_err("%s: header size %zd plus cal type size %d are greater than data buffer size %d\n",
-				__func__, sizeof(data->hdr),
-				data->hdr.cal_type_size, size);
-			ret = -EFAULT;
-			goto unlock;
-		} else if (copy_to_user((void *)arg, data,
+		if (copy_to_user(arg, data,
 			sizeof(data->hdr) + data->hdr.cal_type_size)) {
 			pr_err("%s: Could not copy cal type to user\n",
 				__func__);
@@ -509,9 +594,18 @@ unlock:
 	mutex_unlock(&audio_cal.cal_mutex[data->hdr.cal_type]);
 done:
 	kfree(data);
+	kfree(imp_val); /* ASUS_BSP +++ */
 	return ret;
 }
 
+//<anna-cheng>for proximity near close touch in call
+int get_audiomode(void)
+{
+    printk("%s: Audio mode=%d\n",__func__, audio_mode);
+    return audio_mode;
+}
+EXPORT_SYMBOL(get_audiomode);
+//<anna-cheng>for proximity near close touch in call
 static long audio_cal_ioctl(struct file *f,
 		unsigned int cmd, unsigned long arg)
 {
@@ -532,7 +626,19 @@ static long audio_cal_ioctl(struct file *f,
 							204, compat_uptr_t)
 #define AUDIO_POST_CALIBRATION32	_IOWR(CAL_IOCTL_MAGIC, \
 							205, compat_uptr_t)
+//<anna-cheng>for proximity near close touch in call
+#define AUDIO_SET_MODE32	_IOWR(CAL_IOCTL_MAGIC, \
+								219, compat_uptr_t)
+//<anna-cheng>for proximity near close touch in call
+//sherry ++ for notify AudioWizard the current mode
+#define AUDIO_SET_AUDIOWIZARD_FORCE_PRESET32	_IOWR(CAL_IOCTL_MAGIC, \
+ 							221, compat_uptr_t)
+//sherry--
 
+/* ASUS_BSP  +++ */
+#define AUDIO_GET_HS_IMP32			_IOWR(CAL_IOCTL_MAGIC, \
+							230, compat_uptr_t)
+/* ASUS_BSP  --- */
 static long audio_cal_compat_ioctl(struct file *f,
 		unsigned int cmd, unsigned long arg)
 {
@@ -558,6 +664,21 @@ static long audio_cal_compat_ioctl(struct file *f,
 	case AUDIO_POST_CALIBRATION32:
 		cmd64 = AUDIO_POST_CALIBRATION;
 		break;
+//<anna-cheng>for proximity near close touch in call
+	case AUDIO_SET_MODE32:
+		cmd64 = AUDIO_SET_MODE;
+		break;
+//<anna-cheng>for proximity near close touch in call
+	/* ASUS_BSP +++ */
+	case AUDIO_GET_HS_IMP32:
+		cmd64 = AUDIO_GET_HS_IMP;
+		break;
+	/* ASUS_BSP --- */
+	//sherry ++ for notify audiowizard
+	case AUDIO_SET_AUDIOWIZARD_FORCE_PRESET32:
+		cmd64 = AUDIO_SET_AUDIOWIZARD_FORCE_PRESET;
+		break;
+	//sherry -- for notify audiowizard
 	default:
 		pr_err("%s: ioctl not found!\n", __func__);
 		ret = -EFAULT;
@@ -590,7 +711,7 @@ static int __init audio_cal_init(void)
 {
 	int i = 0;
 	pr_debug("%s\n", __func__);
-
+	audio_mode = 0; //<anna-cheng>for proximity near close touch in call
 	memset(&audio_cal, 0, sizeof(audio_cal));
 	mutex_init(&audio_cal.common_lock);
 	for (; i < MAX_CAL_TYPES; i++) {

@@ -18,6 +18,15 @@
 #include "msm_cci.h"
 #include "msm_eeprom.h"
 
+#include <linux/fs.h>
+#include <asm/uaccess.h>
+#include <linux/device.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include "../fac_camera.h"
+#undef pr_fmt
+#define pr_fmt(fmt) "%s:%d " fmt, __func__, __LINE__
+
 #undef CDBG
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
 
@@ -25,6 +34,12 @@ DEFINE_MSM_MUTEX(msm_eeprom_mutex);
 #ifdef CONFIG_COMPAT
 static struct v4l2_file_operations msm_eeprom_v4l2_subdev_fops;
 #endif
+
+static struct msm_eeprom_ctrl_t * g_e_ctrl = NULL;
+struct msm_eeprom_ctrl_t * get_eeprom_ctrl(void)
+{
+	return g_e_ctrl;
+}
 
 /**
   * msm_get_read_mem_size - Get the total size for allocation
@@ -397,7 +412,24 @@ static int eeprom_parse_memory_map(struct msm_eeprom_ctrl_t *e_ctrl,
 					eeprom_map->mem_settings[i].reg_addr,
 					memptr,
 					eeprom_map->mem_settings[i].reg_data);
+		#ifdef ZD552KL_PHOENIX
+				if(rc<0)
+				{
+					pr_err("Use Chicony Eeprom,change Slave Addr to 0XA8!");
+					e_ctrl->i2c_client.cci_client->sid=0x54;
+					rc = e_ctrl->i2c_client.i2c_func_tbl->
+						i2c_read_seq(&(e_ctrl->i2c_client),
+						eeprom_map->mem_settings[i].reg_addr,
+						memptr,
+						eeprom_map->mem_settings[i].reg_data);
+					}
+		#endif
 				msleep(eeprom_map->mem_settings[i].delay);
+				CDBG("MSM_CAM_READ addr=0x%x,reg_data=0x%x,memptr=0x%x\n"
+					,eeprom_map->mem_settings[i].reg_addr
+					,eeprom_map->mem_settings[i].reg_data
+					,*memptr
+					);
 				if (rc < 0) {
 					pr_err("%s: read failed\n",
 						__func__);
@@ -414,8 +446,6 @@ static int eeprom_parse_memory_map(struct msm_eeprom_ctrl_t *e_ctrl,
 		}
 	}
 	memptr = e_ctrl->cal_data.mapdata;
-	for (i = 0; i < e_ctrl->cal_data.num_data; i++)
-		CDBG("memory_data[%d] = 0x%X\n", i, memptr[i]);
 	return rc;
 
 clean_up:
@@ -654,6 +684,7 @@ static int msm_eeprom_config(struct msm_eeprom_ctrl_t *e_ctrl,
 		rc = msm_eeprom_get_cmm_data(e_ctrl, cdata);
 		break;
 	case CFG_EEPROM_INIT:
+		CDBG("CFG_EEPROM_INIT num_data=%d\n",e_ctrl->cal_data.num_data);
 		if (e_ctrl->userspace_probe == 0) {
 			pr_err("%s:%d Eeprom already probed at kernel boot",
 				__func__, __LINE__);
@@ -1457,15 +1488,15 @@ static int eeprom_init_config32(struct msm_eeprom_ctrl_t *e_ctrl,
 	if (rc < 0) {
 		pr_err("%s:%d memory map parse failed\n",
 			__func__, __LINE__);
-		goto free_mem;
+		goto power_down;
 	}
 
+power_down:
 	rc = msm_camera_power_down(power_info,
 		e_ctrl->eeprom_device_type, &e_ctrl->i2c_client);
 	if (rc < 0)
 		pr_err("%s:%d Power down failed rc %d\n",
 			__func__, __LINE__, rc);
-
 free_mem:
 	kfree(power_setting_array32);
 	kfree(power_setting_array);
@@ -1483,8 +1514,7 @@ static int msm_eeprom_config32(struct msm_eeprom_ctrl_t *e_ctrl,
 		(struct msm_eeprom_cfg_data32 *)argp;
 	int rc = 0;
 	size_t length = 0;
-
-	CDBG("%s E\n", __func__);
+	//CDBG("vicent %s cfgtype:%d E: \n", __func__, cdata->cfgtype);
 	switch (cdata->cfgtype) {
 	case CFG_EEPROM_GET_INFO:
 		if (e_ctrl->userspace_probe == 1) {
@@ -1515,6 +1545,8 @@ static int msm_eeprom_config32(struct msm_eeprom_ctrl_t *e_ctrl,
 		rc = eeprom_config_read_cal_data32(e_ctrl, argp);
 		break;
 	case CFG_EEPROM_INIT:
+		//CDBG("vicent cci_master:%d subdev_id:%d ", e_ctrl->cci_master, e_ctrl->subdev_id);
+		//CDBG("vicent msm_sd.sd.name:%s", e_ctrl->msm_sd.sd.name);
 		if (e_ctrl->userspace_probe == 0) {
 			pr_err("%s:%d Eeprom already probed at kernel boot",
 				__func__, __LINE__);
@@ -1526,6 +1558,10 @@ static int msm_eeprom_config32(struct msm_eeprom_ctrl_t *e_ctrl,
 			if (rc < 0)
 				pr_err("%s:%d Eeprom init failed\n",
 					__func__, __LINE__);
+			//asus bsp ralf:create proc file for eeprom>>
+			else
+				eeprom_create_proc_file(e_ctrl);
+			//asus bsp ralf:create proc file for eeprom<<
 		} else {
 			CDBG("%s:%d Already read eeprom\n",
 				__func__, __LINE__);
@@ -1579,7 +1615,7 @@ static long msm_eeprom_subdev_fops_ioctl32(struct file *file, unsigned int cmd,
 static int msm_eeprom_platform_probe(struct platform_device *pdev)
 {
 	int rc = 0;
-	int j = 0;
+	//int j = 0;
 	uint32_t temp;
 
 	struct msm_camera_cci_client *cci_client = NULL;
@@ -1721,10 +1757,11 @@ static int msm_eeprom_platform_probe(struct platform_device *pdev)
 			pr_err("%s read_eeprom_memory failed\n", __func__);
 			goto power_down;
 		}
+		/*
 		for (j = 0; j < e_ctrl->cal_data.num_data; j++)
 			CDBG("memory_data[%d] = 0x%X\n", j,
 				e_ctrl->cal_data.mapdata[j]);
-
+		*/
 		e_ctrl->is_supported |= msm_eeprom_match_crc(&e_ctrl->cal_data);
 
 		rc = msm_camera_power_down(power_info,
@@ -1757,6 +1794,7 @@ static int msm_eeprom_platform_probe(struct platform_device *pdev)
 #endif
 
 	e_ctrl->is_supported = (e_ctrl->is_supported << 1) | 1;
+	g_e_ctrl = e_ctrl;
 	CDBG("%s X\n", __func__);
 	return rc;
 
@@ -1798,6 +1836,7 @@ static int msm_eeprom_platform_remove(struct platform_device *pdev)
 		&e_ctrl->eboard_info->power_info.clk_info,
 		&e_ctrl->eboard_info->power_info.clk_ptr,
 		e_ctrl->eboard_info->power_info.clk_info_size);
+	eeprom_remove_file(e_ctrl->subdev_id);//asus bsp ralf
 
 	kfree(e_ctrl->i2c_client.cci_client);
 	kfree(e_ctrl->cal_data.mapdata);

@@ -28,6 +28,7 @@
 #include <linux/slab.h>
 #include <linux/spmi.h>
 #include <linux/usb/class-dual-role.h>
+#include <linux/proc_fs.h>
 
 #define CREATE_MASK(NUM_BITS, POS) \
 	((unsigned char) (((1 << (NUM_BITS)) - 1) << (POS)))
@@ -122,6 +123,8 @@ struct qpnp_typec_chip {
 	struct delayed_work		role_reversal_check;
 	struct typec_wakeup_source	role_reversal_wakeup_source;
 };
+
+struct qpnp_typec_chip *typec_chip;
 
 /* current mode */
 static char *mode_text[] = {
@@ -573,6 +576,9 @@ static int qpnp_typec_parse_dt(struct qpnp_typec_chip *chip)
 	int rc;
 	struct device_node *node = chip->dev->of_node;
 
+	chip->role_reversal_supported = of_property_read_bool(node,
+					"qcom,role-reversal-supported");
+
 	/* SS-Mux configuration gpio */
 	if (of_find_property(node, "qcom,ssmux-gpio", NULL)) {
 		chip->ssmux_gpio = of_get_named_gpio_flags(node,
@@ -599,8 +605,6 @@ static int qpnp_typec_parse_dt(struct qpnp_typec_chip *chip)
 			return PTR_ERR(chip->ss_mux_vreg);
 	}
 
-	chip->role_reversal_supported = of_property_read_bool(node,
-					"qcom,role-reversal-supported");
 	return 0;
 }
 
@@ -676,7 +680,21 @@ static int qpnp_typec_request_irqs(struct qpnp_typec_chip *chip)
 static enum power_supply_property qpnp_typec_properties[] = {
 	POWER_SUPPLY_PROP_CURRENT_CAPABILITY,
 	POWER_SUPPLY_PROP_TYPE,
+	POWER_SUPPLY_PROP_TYPEC_MODE,
 };
+
+static int qpnp_sypec_get_typec_mode(struct qpnp_typec_chip *chip)
+{
+	int rc;
+	u8 reg;
+	rc = qpnp_typec_read(chip, &reg, TYPEC_UFP_STATUS_REG(chip->base), 1);
+	if (rc) {
+		pr_err("failed to read status reg rc=%d\n", rc);
+	}
+
+	return (reg & TYPEC_CURRENT_MASK);
+	
+}
 
 static int qpnp_typec_get_property(struct power_supply *psy,
 				enum power_supply_property prop,
@@ -691,6 +709,9 @@ static int qpnp_typec_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_CAPABILITY:
 		val->intval = chip->current_ma;
+		break;
+	case POWER_SUPPLY_PROP_TYPEC_MODE:
+		val->intval = qpnp_sypec_get_typec_mode(chip);
 		break;
 	default:
 		return -EINVAL;
@@ -869,6 +890,36 @@ static int qpnp_typec_dr_get_property(struct dual_role_phy_instance *dual_role,
 	return 0;
 }
 
+#define typec_charger_reg_dump_PROC_FILE "typec_charger_reg_dump"
+static int typec_charger_reg_dump_proc_read(struct seq_file *buf, void *data)
+{
+	u8 reg[2];
+	qpnp_typec_read(typec_chip, reg, TYPEC_UFP_STATUS_REG(typec_chip->base), 2);
+	seq_printf(buf, "[typec]%s0x%04X = %02X\n", "", TYPEC_UFP_STATUS_REG(typec_chip->base), reg[0]);
+	seq_printf(buf, "[typec]%s0x%04X = %02X\n", "", TYPEC_UFP_STATUS_REG(typec_chip->base+1), reg[1]);
+	return 0;
+}
+
+static int typec_charger_reg_dump_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, typec_charger_reg_dump_proc_read, NULL);
+}
+static const struct file_operations typec_charger_reg_dump_fops = {
+	.owner = THIS_MODULE,
+	.open = typec_charger_reg_dump_proc_open,
+	.read = seq_read,
+};
+static void create_typec_charger_reg_dump_proc_file(void)
+{
+	struct proc_dir_entry *typec_charger_reg_dump_proc_file = proc_create(typec_charger_reg_dump_PROC_FILE, 0666, NULL, &typec_charger_reg_dump_fops);
+
+	if (typec_charger_reg_dump_proc_file) {
+		//printk("[BAT][CHG][SMB][Proc]typec_charger_reg_dump_proc_file create ok!\n");
+	} else{
+		printk("[BAT][CHG][SMB][Proc]typec_charger_reg_dump_proc_file create failed!\n");
+	}
+}
+
 static int qpnp_typec_probe(struct spmi_device *spmi)
 {
 	int rc;
@@ -901,6 +952,8 @@ static int qpnp_typec_probe(struct spmi_device *spmi)
 	device_init_wakeup(&spmi->dev, 1);
 	mutex_init(&chip->typec_lock);
 	spin_lock_init(&chip->rw_lock);
+
+	typec_chip=chip;
 
 	/* determine initial status */
 	rc = qpnp_typec_determine_initial_status(chip);
@@ -955,6 +1008,8 @@ static int qpnp_typec_probe(struct spmi_device *spmi)
 		pr_err("failed to request irqs rc=%d\n", rc);
 		goto unregister_psy;
 	}
+
+	create_typec_charger_reg_dump_proc_file();
 
 	pr_info("TypeC successfully probed state=%d CC-line-state=%d\n",
 			chip->typec_state, chip->cc_line_state);

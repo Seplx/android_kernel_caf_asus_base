@@ -744,6 +744,22 @@ set_perf(struct device *dev, struct device_attribute *attr,
 	return count;
 }
 
+//<ASUS_BSP +++ Hank2_Liu 20170302> Add sd_status Node for ATD ++++++
+static ssize_t
+show_sdstatus(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mmc_host *host = cls_dev_to_mmc_host(dev);
+	BUG_ON(!host);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", host->sd_status);
+}
+
+static DEVICE_ATTR(sd_status, S_IRUGO | S_IWUSR,
+		show_sdstatus, NULL);
+//<ASUS_BSP +++ Hank2_Liu 20170302> Add sd_status Node for ATD ------
+
+
+
 static DEVICE_ATTR(perf, S_IRUGO | S_IWUSR,
 		show_perf, set_perf);
 
@@ -753,6 +769,7 @@ static struct attribute *dev_attrs[] = {
 #ifdef CONFIG_MMC_PERF_PROFILING
 	&dev_attr_perf.attr,
 #endif
+	&dev_attr_sd_status.attr, //<ASUS_BSP +++ Hank2_Liu 20170302> Add sd_status Node for ATD ------
 	NULL,
 };
 static struct attribute_group dev_attr_grp = {

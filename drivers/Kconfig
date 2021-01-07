@@ -46,6 +46,8 @@ source "drivers/isdn/Kconfig"
 
 source "drivers/input/Kconfig"
 
+source "drivers/fingerprint/Kconfig"
+
 source "drivers/char/Kconfig"
 
 source "drivers/i2c/Kconfig"
@@ -197,7 +199,5 @@ source "drivers/sensors/Kconfig"
 source "drivers/firmware/Kconfig"
 
 source "drivers/bif/Kconfig"
-
-source "drivers/gud/Kconfig"
 
 endmenu

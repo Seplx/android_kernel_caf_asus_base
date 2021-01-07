@@ -217,9 +217,9 @@
 	rpm-regulator-ldoa10 {
 		status = "okay";
 		pm8953_l10: regulator-l10 {
-			regulator-min-microvolt = <2850000>;
-			regulator-max-microvolt = <2850000>;
-			qcom,init-voltage = <2850000>;
+			regulator-min-microvolt = <3300000>;
+			regulator-max-microvolt = <3300000>;
+			qcom,init-voltage = <3300000>;
 			status = "okay";
 		};
 	};
@@ -914,7 +914,7 @@
 		regulator-name = "eldo2_8953";
 		startup-delay-us = <0>;
 		enable-active-high;
-		gpio = <&tlmm 50 0>;
+		//gpio = <&tlmm 50 0>;
 		regulator-always-on;
 	};
 

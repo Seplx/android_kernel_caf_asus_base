@@ -5,7 +5,7 @@
  *
  * Copyright (C) 2012 Alexandra Chin <alexandra.chin@tw.synaptics.com>
  * Copyright (C) 2012 Scott Lin <scott.lin@tw.synaptics.com>
- * Copyright (C) 2016 The Linux Foundation. All rights reserved.
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -37,22 +37,17 @@
 #define SYNAPTICS_DS4 (1 << 0)
 #define SYNAPTICS_DS5 (1 << 1)
 #define SYNAPTICS_DSX_DRIVER_PRODUCT (SYNAPTICS_DS4 | SYNAPTICS_DS5)
-#define SYNAPTICS_DSX_DRIVER_VERSION 0x2061
+#define SYNAPTICS_DSX_DRIVER_VERSION 0x2060
 
 #include <linux/version.h>
+#include <linux/debugfs.h>
+#include <linux/switch.h>
 #ifdef CONFIG_FB
 #include <linux/notifier.h>
 #include <linux/fb.h>
 #endif
 #ifdef CONFIG_HAS_EARLYSUSPEND
 #include <linux/earlysuspend.h>
-#endif
-
-#if defined(CONFIG_SECURE_TOUCH_SYNAPTICS_DSX_V26)
-#include <linux/completion.h>
-#include <linux/atomic.h>
-#include <linux/pm_runtime.h>
-#include <linux/clk.h>
 #endif
 
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 38))
@@ -122,9 +117,17 @@
 #define MASK_2BIT 0x03
 #define MASK_1BIT 0x01
 
+#define VDD_MIN_UV             3300000
+#define VDD_MAX_UV             3300000
+#define VDDA_I2C_MIN_UV         1800000
+#define VDDA_I2C_MAX_UV         1800000
+
 #define PINCTRL_STATE_ACTIVE    "pmx_ts_active"
 #define PINCTRL_STATE_SUSPEND   "pmx_ts_suspend"
 #define PINCTRL_STATE_RELEASE   "pmx_ts_release"
+
+#define SYNA_FW_NAME_MAX_LEN	50
+
 enum exp_fn {
 	RMI_DEV = 0,
 	RMI_FW_UPDATER,
@@ -312,29 +315,42 @@ struct synaptics_rmi4_device_info {
  * @report_pressure: flag to indicate reporting of pressure data
  * @stylus_enable: flag to indicate reporting of stylus data
  * @eraser_enable: flag to indicate reporting of eraser data
- * @external_afe_buttons: flag to indicate presence of external AFE buttons
  * @reset_device: pointer to device reset function
  * @irq_enable: pointer to interrupt enable function
  * @sleep_enable: pointer to sleep enable function
- * @report_touch: pointer to touch reporting function
  */
 struct synaptics_rmi4_data {
 	struct platform_device *pdev;
 	struct input_dev *input_dev;
 	struct input_dev *stylus_dev;
 	const struct synaptics_dsx_hw_interface *hw_if;
+	struct switch_dev touch_sdev;
+	struct dentry *dir;
 	struct synaptics_rmi4_device_info rmi4_mod_info;
 	struct kobject *board_prop_dir;
 	struct regulator *pwr_reg;
 	struct regulator *bus_reg;
+	struct regulator *regulator_vdd;
+	struct regulator *regulator_avdd;
 	struct mutex rmi4_reset_mutex;
 	struct mutex rmi4_report_mutex;
 	struct mutex rmi4_io_ctrl_mutex;
 	struct mutex rmi4_exp_init_mutex;
+	struct mutex cap_mutex;
+	struct mutex rmi4_fw_mutex;
 	struct delayed_work rb_work;
 	struct workqueue_struct *rb_workqueue;
+	struct pinctrl *ts_pinctrl;
+	struct pinctrl_state *pinctrl_state_active;
+	struct pinctrl_state *pinctrl_state_suspend;
+	struct pinctrl_state *pinctrl_state_release;
+
+
+	//<ASUS_usb_cable_status+>
+	struct workqueue_struct *usb_wq;
+	struct work_struct usb_detect_work;
+	//<ASUS_usb_cable_status->
 #ifdef CONFIG_FB
-	struct work_struct fb_notify_work;
 	struct notifier_block fb_notifier;
 	struct work_struct reset_work;
 	struct workqueue_struct *reset_workqueue;
@@ -358,10 +374,38 @@ struct synaptics_rmi4_data {
 	unsigned short f01_cmd_base_addr;
 	unsigned short f01_ctrl_base_addr;
 	unsigned short f01_data_base_addr;
+	//<ASUS_Glove+>
+	unsigned short f12_ctrl23_base_addr;
+	unsigned short f12_ctrl10_base_addr;
+	unsigned short f12_ctrl9_base_addr;
+	unsigned short f54_ctrl113_base_addr;
+
+	unsigned char gloved_finger_threshold;
+	unsigned char noise_floor;
+	unsigned char min_peak_amp;
+	unsigned char tx_axis_obj_threshold;
+
+	//<ASUS_Glove->
+	//<ASUS_COVER+>
+	unsigned short f12_ctrl15_base_addr;
+	//<ASUS_COVER->
+	//<ASUS_DTP+>
+	unsigned short f12_ctrl18_base_addr;
+	//<ASUS_DTP->
 	unsigned int firmware_id;
+	unsigned int config_id;
+	char fw_name[SYNA_FW_NAME_MAX_LEN];
 	int irq;
 	int sensor_max_x;
 	int sensor_max_y;
+	//<ASUS_usb_cable_status+>
+	bool usb_status;
+	//<ASUS_usb_cable_status->
+	//<ASUS_suspend_workqueue+>
+	struct workqueue_struct *suspend_resume_wq;
+	struct work_struct suspend_work;
+	struct work_struct resume_work;
+	//<ASUS_suspend_workqueue->
 	bool flash_prog_mode;
 	bool irq_enabled;
 	bool fingers_on_2d;
@@ -372,32 +416,17 @@ struct synaptics_rmi4_data {
 	bool f11_wakeup_gesture;
 	bool f12_wakeup_gesture;
 	bool enable_wakeup_gesture;
+	bool touch_stopped;
 	bool wedge_sensor;
 	bool report_pressure;
 	bool stylus_enable;
 	bool eraser_enable;
-	bool external_afe_buttons;
 	int (*reset_device)(struct synaptics_rmi4_data *rmi4_data,
 			bool rebuild);
 	int (*irq_enable)(struct synaptics_rmi4_data *rmi4_data, bool enable,
 			bool attn_only);
 	void (*sleep_enable)(struct synaptics_rmi4_data *rmi4_data,
 			bool enable);
-	void (*report_touch)(struct synaptics_rmi4_data *rmi4_data,
-			struct synaptics_rmi4_fn *fhandler);
-	struct pinctrl *ts_pinctrl;
-	struct pinctrl_state *pinctrl_state_active;
-	struct pinctrl_state *pinctrl_state_suspend;
-	struct pinctrl_state *pinctrl_state_release;
-#if defined(CONFIG_SECURE_TOUCH_SYNAPTICS_DSX_V26)
-	atomic_t st_enabled;
-	atomic_t st_pending_irqs;
-	struct completion st_powerdown;
-	struct completion st_irq_processed;
-	bool st_initialized;
-	struct clk *core_clk;
-	struct clk *iface_clk;
-#endif
 };
 
 struct synaptics_dsx_bus_access {
@@ -406,10 +435,6 @@ struct synaptics_dsx_bus_access {
 		unsigned char *data, unsigned short length);
 	int (*write)(struct synaptics_rmi4_data *rmi4_data, unsigned short addr,
 		unsigned char *data, unsigned short length);
-#if defined(CONFIG_SECURE_TOUCH_SYNAPTICS_DSX_V26)
-	int (*get)(struct synaptics_rmi4_data *rmi4_data);
-	void (*put)(struct synaptics_rmi4_data *rmi4_data);
-#endif
 };
 
 struct synaptics_dsx_hw_interface {
@@ -433,9 +458,9 @@ struct synaptics_rmi4_exp_fn {
 			unsigned char intr_mask);
 };
 
-int synaptics_rmi4_bus_init_v26(void);
+int synaptics_rmi4_bus_init(void);
 
-void synaptics_rmi4_bus_exit_v26(void);
+void synaptics_rmi4_bus_exit(void);
 
 void synaptics_rmi4_new_function(struct synaptics_rmi4_exp_fn *exp_fn_module,
 		bool insert);
@@ -460,16 +485,21 @@ static inline int synaptics_rmi4_reg_write(
 	return rmi4_data->hw_if->bus_access->write(rmi4_data, addr, data, len);
 }
 
-#if defined(CONFIG_SECURE_TOUCH_SYNAPTICS_DSX_V26)
-static inline int synaptics_rmi4_bus_get(struct synaptics_rmi4_data *rmi4_data)
+static inline ssize_t synaptics_rmi4_show_error(struct device *dev,
+		struct device_attribute *attr, char *buf)
 {
-	return rmi4_data->hw_if->bus_access->get(rmi4_data);
+	dev_warn(dev, "%s Attempted to read from write-only attribute %s\n",
+			__func__, attr->attr.name);
+	return -EPERM;
 }
-static inline void synaptics_rmi4_bus_put(struct synaptics_rmi4_data *rmi4_data)
+
+static inline ssize_t synaptics_rmi4_store_error(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
 {
-	rmi4_data->hw_if->bus_access->put(rmi4_data);
+	dev_warn(dev, "%s Attempted to write to read-only attribute %s\n",
+			__func__, attr->attr.name);
+	return -EPERM;
 }
-#endif
 
 static inline int secure_memcpy(unsigned char *dest, unsigned int dest_size,
 		const unsigned char *src, unsigned int src_size,
@@ -496,5 +526,15 @@ static inline void hstoba(unsigned char *dest, unsigned short src)
 	dest[0] = src % 0x100;
 	dest[1] = src / 0x100;
 }
+
+
+//<ASUS_link_to_absolute_path+>
+int synaptics_rmi4_link_input2dev(struct synaptics_rmi4_data *rmi4_data);
+void synaptics_rmi4_unlink_input2dev(struct synaptics_rmi4_data *rmi4_data);
+//<ASUS_link_to_absolute_path->
+
+//ASUS_BSP++++++++++ found F54 Ctrl113 for glove mode
+int synaptics_rmi4_found_f54_ctrl113(struct synaptics_rmi4_data *rmi4_data);
+//ASUS_BSP----------
 
 #endif

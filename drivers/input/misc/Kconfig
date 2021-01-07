@@ -756,4 +756,30 @@ config INPUT_DRV2667_HAPTICS
 	  To compile this driver as a module, choose M here: the
 	  module will be called drv260x-haptics.
 
+config SENSORS_CM3323	
+	tristate "CM3323  RGB and light sensor"	
+	depends on I2C	
+	default n	
+	help	
+	Say Y here to enable the CM3323 RGB and light sensor	
+	Sensor with Ambient Light Sensor.	
+	To compile this driver as a module, choose M here: the	
+	module will be called CM3323.
+
+config SENSORS_CM36283	
+	tristate "CM36283 proximity and light sensor"	
+	depends on I2C	
+	default n	
+	help	
+	Say Y here to enable the CM36283 Proximity	
+	Sensor with Ambient Light Sensor.	
+	To compile this driver as a module, choose M here: the	
+	module will be called CM36283.
+config SENSORS_CM36656
+       tristate "CM36656 optical sensor"
+       depends on I2C
+       default n
+       help
+         Say Y here to enable the CM36656 Optical Sensor.
+
 endif

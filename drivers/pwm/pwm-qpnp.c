@@ -2087,6 +2087,10 @@ static int qpnp_pwm_probe(struct spmi_device *spmi)
 	struct qpnp_pwm_chip	*pwm_chip;
 	int			rc;
 
+	u8 value;
+	
+	printk("%s\n",__FUNCTION__);
+
 	pwm_chip = kzalloc(sizeof(*pwm_chip), GFP_KERNEL);
 	if (pwm_chip == NULL) {
 		pr_err("kzalloc() failed.\n");
@@ -2118,6 +2122,12 @@ static int qpnp_pwm_probe(struct spmi_device *spmi)
 
 	if (pwm_chip->channel_owner)
 		pwm_chip->chip.pwms[0].label = pwm_chip->channel_owner;
+
+		
+	value=0xA5;
+	spmi_ext_register_writel(pwm_chip->spmi_dev->ctrl, 3, 0xB0D0, &value, 1 );
+	value=0x01;
+	spmi_ext_register_writel(pwm_chip->spmi_dev->ctrl, 3, 0xB0E2, &value, 1 );
 
 	pr_debug("PWM device sid:%d channel:%d probed successfully\n",
 		spmi->sid, pwm_chip->channel_id);

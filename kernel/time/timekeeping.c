@@ -227,6 +227,18 @@ static inline s64 timekeeping_get_ns_raw(struct timekeeper *tk)
 	return nsec + arch_gettimeoffset();
 }
 
+//ASUS_BSP +++ jeff_gu add for trace suspend time
+//fix nsec overflow during suspend in the original timekeeping_get_ns
+s64 get_ns_from_hw(void)
+{
+	struct timekeeper *tk = &tk_core.timekeeper;
+	s64 nsecs = timekeeping_get_ns_raw(tk);
+	return nsecs;
+}
+EXPORT_SYMBOL_GPL(get_ns_from_hw);
+//ASUS_BSP --- jeff_gu add for trace suspend time
+
+
 /**
  * update_fast_timekeeper - Update the fast and NMI safe monotonic timekeeper.
  * @tk:		The timekeeper from which we take the update

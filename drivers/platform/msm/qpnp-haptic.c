@@ -363,6 +363,9 @@ struct qpnp_hap {
 	bool correct_lra_drive_freq;
 	bool misc_trim_error_rc19p2_clk_reg_present;
 	bool perform_lra_auto_resonance_search;
+//wxtest
+	int vmax_level;
+//wxtest
 };
 
 static struct qpnp_hap *ghap;
@@ -429,25 +432,29 @@ static void qpnp_handle_sc_irq(struct work_struct *work)
 static int qpnp_hap_mod_enable(struct qpnp_hap *hap, int on)
 {
 	u8 val;
-	int rc, i;
-
+	int rc;
+#ifdef ZD552KL_PHOENIX
+        int i;
+#endif
 	val = hap->reg_en_ctl;
 	if (on) {
 		val |= QPNP_HAP_EN;
 	} else {
+#ifdef ZD552KL_PHOENIX
 		for (i = 0; i < QPNP_HAP_MAX_RETRIES; i++) {
 			/* wait for 4 cycles of play rate */
+
 			unsigned long sleep_time =
 				QPNP_HAP_CYCLS * hap->wave_play_rate_us;
 
 			rc = qpnp_hap_read_reg(hap, &val,
 				QPNP_HAP_STATUS(hap->base));
 
-			dev_dbg(&hap->spmi->dev, "HAP_STATUS=0x%x\n", val);
-
 			/* wait for QPNP_HAP_CYCLS cycles of play rate */
+
 			if (val & QPNP_HAP_STATUS_BUSY) {
 				usleep_range(sleep_time, sleep_time + 1);
+
 				if (hap->play_mode == QPNP_HAP_DIRECT ||
 					hap->play_mode == QPNP_HAP_PWM)
 					break;
@@ -458,7 +465,7 @@ static int qpnp_hap_mod_enable(struct qpnp_hap *hap, int on)
 		if (i >= QPNP_HAP_MAX_RETRIES)
 			dev_dbg(&hap->spmi->dev,
 				"Haptics Busy. Force disable\n");
-
+#endif
 		val &= ~QPNP_HAP_EN;
 	}
 
@@ -728,8 +735,8 @@ static int qpnp_hap_vmax_config(struct qpnp_hap *hap)
 	u8 reg = 0;
 	int rc, temp;
 
-	if (hap->vmax_mv < QPNP_HAP_VMAX_MIN_MV)
-		hap->vmax_mv = QPNP_HAP_VMAX_MIN_MV;
+	if (hap->vmax_mv < /*QPNP_HAP_VMAX_MIN_MV*/0) //wxtest
+		hap->vmax_mv = /*QPNP_HAP_VMAX_MIN_MV*/0; //wxtest
 	else if (hap->vmax_mv > QPNP_HAP_VMAX_MAX_MV)
 		hap->vmax_mv = QPNP_HAP_VMAX_MAX_MV;
 
@@ -738,11 +745,18 @@ static int qpnp_hap_vmax_config(struct qpnp_hap *hap)
 		return rc;
 	reg &= QPNP_HAP_VMAX_MASK;
 	temp = hap->vmax_mv / QPNP_HAP_VMAX_MIN_MV;
+//wxtest
+	if (hap->vmax_mv > QPNP_HAP_VMAX_MIN_MV * temp) {
+		temp++;
+	}
+//wxtest
 	reg |= (temp << QPNP_HAP_VMAX_SHIFT);
 	rc = qpnp_hap_write_reg(hap, &reg, QPNP_HAP_VMAX_REG(hap->base));
 	if (rc)
 		return rc;
-
+//wxtest
+	pr_err("haptic vmax_config : vmax = %d\n", hap->vmax_mv);
+//wxtest
 	return 0;
 }
 
@@ -1322,6 +1336,216 @@ static ssize_t qpnp_hap_ramp_test_data_show(struct device *dev,
 
 }
 
+//wxtest
+static ssize_t qpnp_hap_vmax_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
+	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
+					 timed_dev);
+	int ret;
+	u8 temp;
+
+	ret = qpnp_hap_read_reg(hap, &temp, QPNP_HAP_VMAX_REG(hap->base));
+	if (ret < 0)
+		return ret;
+	temp &= ~QPNP_HAP_VMAX_MASK;
+	ret = (temp >> QPNP_HAP_VMAX_SHIFT);
+	ret *= QPNP_HAP_VMAX_MIN_MV;
+#ifndef ASUS_FACTORY_BUILD 
+	return snprintf(buf, PAGE_SIZE, "level = %d, vmax = %d\n", hap->vmax_level, ret);
+#else
+        return snprintf(buf, PAGE_SIZE,"%d\n",ret);
+#endif
+}
+#ifdef ZE553KL
+static int asus_vmax_mv[7] = {116, 348, 580, 812, 1044, 1160, 1392}; //level_general_0~level_general_5,level_alarm
+#endif
+#ifdef ZD552KL_PHOENIX
+static int asus_vmax_mv[7] = {348, 582, 928, 1160, 1392, 1740, 1740}; //level_general_0~level_general_5,level_alarm
+#endif
+static ssize_t qpnp_hap_vmax_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
+	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
+					 timed_dev);
+	int ret,index;
+
+	if (sscanf(buf, "%d", &index) != 1) {
+		return -EINVAL;
+	}
+#ifndef ASUS_FACTORY_BUILD 
+	if (index < 0) index = 0; //level_general_0
+	if (index > 6) index = 5; //level_general_5
+
+	hap->vmax_mv = asus_vmax_mv[index];
+        hap->vmax_level = index;
+        pr_err("haptic : vmax_level = %d\n", hap->vmax_level);
+#else
+        hap->vmax_mv = index;
+        hap->vmax_level=0;
+        ret=asus_vmax_mv[0];
+#endif
+	ret = qpnp_hap_vmax_config(hap);
+	if (ret) {
+		return -EINVAL;
+	}
+	
+	
+
+	return count;
+}
+//wxtest
+
+//wxtest
+static ssize_t qpnp_hap_auto_res_mode_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
+	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
+					 timed_dev);
+	int ret;
+	u8 temp;
+
+	ret = qpnp_hap_read_reg(hap, &temp, QPNP_HAP_LRA_AUTO_RES_REG(hap->base));
+	if (ret < 0)
+		return ret;
+	temp &= ~QPNP_HAP_AUTO_RES_MODE_MASK;
+	temp = temp >> QPNP_HAP_AUTO_RES_MODE_SHIFT;
+
+	return snprintf(buf, PAGE_SIZE, "auto_res_mode = %d\n", temp);
+}
+
+static ssize_t qpnp_hap_auto_res_mode_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
+	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
+					 timed_dev);
+	int ret;
+	u8 temp;
+	int auto_res_mode;
+
+	if (sscanf(buf, "%d", &auto_res_mode) != 1) {
+		return -EINVAL;
+	}
+
+	if ((auto_res_mode > 7) || (auto_res_mode < 0)) {
+		return -EINVAL;
+	}
+
+	ret = qpnp_hap_read_reg(hap, &temp, QPNP_HAP_LRA_AUTO_RES_REG(hap->base));
+	if (ret < 0) return ret;
+	temp &= QPNP_HAP_AUTO_RES_MODE_MASK;
+	temp |= (auto_res_mode << QPNP_HAP_AUTO_RES_MODE_SHIFT);
+	ret = qpnp_hap_write_reg(hap, &temp, QPNP_HAP_LRA_AUTO_RES_REG(hap->base));
+	if (ret < 0) return ret;
+	hap->auto_res_mode = auto_res_mode;
+
+	dev_err(&hap->spmi->dev,"qpnp_hap_auto_res_mode_store : auto_res_mode = %d\n", auto_res_mode);
+
+	return count;
+}
+
+static ssize_t qpnp_hap_lra_high_z_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
+	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
+					 timed_dev);
+	int ret;
+	u8 temp;
+
+	ret = qpnp_hap_read_reg(hap, &temp, QPNP_HAP_LRA_AUTO_RES_REG(hap->base));
+	if (ret < 0)
+		return ret;
+	temp &= ~QPNP_HAP_LRA_HIGH_Z_MASK;
+	temp = temp >> QPNP_HAP_LRA_HIGH_Z_SHIFT;
+
+	return snprintf(buf, PAGE_SIZE, "lra_high_z = %d\n", temp);
+}
+
+static ssize_t qpnp_hap_lra_high_z_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
+	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
+					 timed_dev);
+	int ret;
+	u8 temp;
+	int lra_high_z;
+
+	if (sscanf(buf, "%d", &lra_high_z) != 1) {
+		return -EINVAL;
+	}
+
+	if ((lra_high_z > 3) || (lra_high_z < 0)) {
+		return -EINVAL;
+	}
+
+	ret = qpnp_hap_read_reg(hap, &temp, QPNP_HAP_LRA_AUTO_RES_REG(hap->base));
+	if (ret < 0) return ret;
+	temp &= QPNP_HAP_LRA_HIGH_Z_MASK;
+	temp |= (lra_high_z << QPNP_HAP_LRA_HIGH_Z_SHIFT);
+	ret = qpnp_hap_write_reg(hap, &temp, QPNP_HAP_LRA_AUTO_RES_REG(hap->base));
+	if (ret < 0) return ret;
+	hap->lra_high_z = lra_high_z;
+
+	dev_err(&hap->spmi->dev,"qpnp_hap_lra_high_z_store : lra_high_z = %d\n", lra_high_z);
+
+	return count;
+}
+
+static ssize_t qpnp_hap_brake_pattern_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
+	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
+					 timed_dev);
+	int ret;
+	u8 temp;
+
+	ret = qpnp_hap_read_reg(hap, &temp, QPNP_HAP_BRAKE_REG(hap->base));
+	if (ret < 0)
+		return ret;
+
+	return snprintf(buf, PAGE_SIZE, "brake_pattern = %d\n", temp);
+}
+
+static ssize_t qpnp_hap_brake_pattern_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
+	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
+					 timed_dev);
+	int ret;
+	u8 temp;
+	int brake_pattern;
+
+	if (sscanf(buf, "%d", &brake_pattern) != 1) {
+		return -EINVAL;
+	}
+
+	if ((brake_pattern > 1) || (brake_pattern < 0)) {
+		return -EINVAL;
+	}
+
+	if (brake_pattern == 0) {
+		temp = 0;
+	}
+	else {
+		temp = 0xff;
+	}
+	ret = qpnp_hap_write_reg(hap, &temp, QPNP_HAP_BRAKE_REG(hap->base));
+	if (ret < 0) return ret;
+
+	dev_err(&hap->spmi->dev,"qpnp_hap_brake_pattern_store : brake_pattern = %d\n", brake_pattern);
+
+	return count;
+}
+//wxtest
+
 /* sysfs attributes */
 static struct device_attribute qpnp_hap_attrs[] = {
 	__ATTR(wf_s0, (S_IRUGO | S_IWUSR | S_IWGRP),
@@ -1369,6 +1593,22 @@ static struct device_attribute qpnp_hap_attrs[] = {
 	__ATTR(min_max_test, (S_IRUGO | S_IWUSR | S_IWGRP),
 			qpnp_hap_min_max_test_data_show,
 			qpnp_hap_min_max_test_data_store),
+//wxtest
+	__ATTR(vmax, (S_IRUGO | S_IWUSR | S_IWGRP),
+			qpnp_hap_vmax_show,
+			qpnp_hap_vmax_store),
+//wxtest
+//wxtest
+	__ATTR(auto_res_mode, (S_IRUGO | S_IWUSR | S_IWGRP),
+			qpnp_hap_auto_res_mode_show,
+			qpnp_hap_auto_res_mode_store),
+	__ATTR(lra_high_z, (S_IRUGO | S_IWUSR | S_IWGRP),
+			qpnp_hap_lra_high_z_show,
+			qpnp_hap_lra_high_z_store),
+	__ATTR(brake_pattern, (S_IRUGO | S_IWUSR | S_IWGRP),
+			qpnp_hap_brake_pattern_show,
+			qpnp_hap_brake_pattern_store),
+//wxtest
 };
 
 static int calculate_lra_code(struct qpnp_hap *hap)
@@ -1655,7 +1895,10 @@ static void qpnp_hap_td_enable(struct timed_output_dev *dev, int value)
 		hrtimer_cancel(&hap->auto_res_err_poll_timer);
 
 	hrtimer_cancel(&hap->hap_timer);
-
+//wxtest
+      if(value !=0)
+         printk("[Haptic]qpnp_hap_td_enable: %d\n", value);
+//wxtest
 	if (value == 0) {
 		if (hap->state == 0) {
 			mutex_unlock(&hap->lock);
@@ -2264,7 +2507,9 @@ static int qpnp_hap_parse_dt(struct qpnp_hap *hap)
 		dev_err(&spmi->dev, "Unable to read vmax\n");
 		return rc;
 	}
-
+//wxtest
+	hap->vmax_level = -1;
+//wxtest
 	hap->ilim_ma = QPNP_HAP_ILIM_MIN_MV;
 	rc = of_property_read_u32(spmi->dev.of_node,
 			"qcom,ilim-ma", &temp);

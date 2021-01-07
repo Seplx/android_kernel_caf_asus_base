@@ -2,7 +2,7 @@
  * Core MDSS framebuffer driver.
  *
  * Copyright (C) 2007 Google Incorporated
- * Copyright (c) 2008-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2008-2017, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -54,6 +54,7 @@
 #include "mdss_debug.h"
 #include "mdss_smmu.h"
 #include "mdss_mdp.h"
+
 
 #ifdef CONFIG_FB_MSM_TRIPLE_BUFFER
 #define MDSS_FB_NUM 3
@@ -1756,11 +1757,9 @@ static int mdss_fb_blank_unblank(struct msm_fb_data_type *mfd)
 		pr_debug("No change in power state\n");
 		return 0;
 	}
-
 	if (mfd->mdp.on_fnc) {
 		struct mdss_panel_info *panel_info = mfd->panel_info;
 		struct fb_var_screeninfo *var = &mfd->fbi->var;
-
 		ret = mfd->mdp.on_fnc(mfd);
 		if (ret) {
 			mdss_fb_stop_disp_thread(mfd);
@@ -1817,7 +1816,16 @@ static int mdss_fb_blank_unblank(struct msm_fb_data_type *mfd)
 error:
 	return ret;
 }
-
+#ifdef ZD552KL_PHOENIX
+extern void set_phoenix_alpm_cmd(short alpm_mode);
+extern bool already_alpm_mode;
+//<ASUSBSP Robert_He 20170511> print backlight log when resume +++
+bool panel_resume_on = false;
+EXPORT_SYMBOL(panel_resume_on);
+bool disable_cap_off = false;
+EXPORT_SYMBOL(disable_cap_off);
+//<ASUSBSP Robert_He 20170511> print backlight log when resume ---
+#endif
 static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 			     int op_enable)
 {
@@ -1865,6 +1873,13 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 	switch (blank_mode) {
 	case FB_BLANK_UNBLANK:
 		pr_debug("unblank called. cur pwr state=%d\n", cur_power_state);
+//<ASUS BSP Robert_He 201704509>set alpm value when enter/exit alwayson++++++
+#ifdef ZD552KL_PHOENIX
+		disable_cap_off = false;
+		panel_resume_on = true;
+#endif
+//<ASUS BSP Robert_He 201704509>set alpm value when enter/exit alwayson------
+
 		ret = mdss_fb_blank_unblank(mfd);
 		break;
 	case BLANK_FLAG_ULP:
@@ -1874,8 +1889,8 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 			pr_debug("Unsupp transition: off --> ulp\n");
 			return 0;
 		}
-
 		ret = mdss_fb_blank_blank(mfd, req_power_state);
+
 		break;
 	case BLANK_FLAG_LP:
 		req_power_state = MDSS_PANEL_POWER_LP1;
@@ -1890,9 +1905,13 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 			ret = mdss_fb_blank_unblank(mfd);
 			if (ret)
 				break;
+#ifdef ZD552KL_PHOENIX
+                        pr_info("[Panel]here is off_to_alpm \n");
+                        msleep(100);
+#endif
 		}
-
 		ret = mdss_fb_blank_blank(mfd, req_power_state);
+
 		break;
 	case FB_BLANK_HSYNC_SUSPEND:
 	case FB_BLANK_POWERDOWN:
@@ -3283,7 +3302,6 @@ int mdss_fb_atomic_commit(struct fb_info *info,
 
 	if (wait_for_finish)
 		ret = mdss_fb_pan_idle(mfd);
-
 end:
 	if (ret && (mfd->panel.type == WRITEBACK_PANEL) && wb_change)
 		mdss_fb_update_resolution(mfd, old_xres, old_yres, old_format);
@@ -4131,8 +4149,6 @@ static int mdss_fb_handle_buf_sync_ioctl(struct msm_sync_pt_data *sync_pt_data,
 		goto buf_sync_err_2;
 	}
 
-	sync_fence_install(rel_fence, rel_fen_fd);
-
 	ret = copy_to_user(buf_sync->rel_fen_fd, &rel_fen_fd, sizeof(int));
 	if (ret) {
 		pr_err("%s: copy_to_user failed\n", sync_pt_data->fence_name);
@@ -4169,8 +4185,6 @@ static int mdss_fb_handle_buf_sync_ioctl(struct msm_sync_pt_data *sync_pt_data,
 		goto buf_sync_err_3;
 	}
 
-	sync_fence_install(retire_fence, retire_fen_fd);
-
 	ret = copy_to_user(buf_sync->retire_fen_fd, &retire_fen_fd,
 			sizeof(int));
 	if (ret) {
@@ -4181,7 +4195,11 @@ static int mdss_fb_handle_buf_sync_ioctl(struct msm_sync_pt_data *sync_pt_data,
 		goto buf_sync_err_3;
 	}
 
+	sync_fence_install(retire_fence, retire_fen_fd);
+
 skip_retire_fence:
+	sync_fence_install(rel_fence, rel_fen_fd);
+
 	mutex_unlock(&sync_pt_data->sync_mutex);
 
 	if (buf_sync->flags & MDP_BUF_SYNC_FLAG_WAIT)
